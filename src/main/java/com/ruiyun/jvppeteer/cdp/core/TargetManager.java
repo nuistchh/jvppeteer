@@ -59,17 +59,17 @@ public class TargetManager extends EventEmitter<TargetManager.TargetManagerEvent
         this.targetFilterCallback = targetFilterCallback;
         this.targetFactory = targetFactory;
         this.waitForInitiallyDiscoveredTargets = waitForInitiallyDiscoveredTargets;
-        Consumer<TargetCreatedEvent> onTargetCreatedListener = this::onTargetCreated;
-        this.connection.on(ConnectionEvents.Target_targetCreated, onTargetCreatedListener);
-        this.listeners.put(ConnectionEvents.Target_targetCreated, onTargetCreatedListener);
-
-        Consumer<TargetDestroyedEvent> onTargetDestroyedListener = this::onTargetDestroyed;
-        this.connection.on(ConnectionEvents.Target_targetDestroyed, onTargetDestroyedListener);
-        this.listeners.put(ConnectionEvents.Target_targetDestroyed, onTargetDestroyedListener);
-
-        Consumer<TargetInfoChangedEvent> onTargetInfoChangedListener = this::onTargetInfoChanged;
-        this.connection.on(ConnectionEvents.Target_targetInfoChanged, onTargetInfoChangedListener);
-        this.listeners.put(ConnectionEvents.Target_targetInfoChanged, onTargetInfoChangedListener);
+//        Consumer<TargetCreatedEvent> onTargetCreatedListener = this::onTargetCreated;
+//        this.connection.on(ConnectionEvents.Target_targetCreated, onTargetCreatedListener);
+//        this.listeners.put(ConnectionEvents.Target_targetCreated, onTargetCreatedListener);
+//
+//        Consumer<TargetDestroyedEvent> onTargetDestroyedListener = this::onTargetDestroyed;
+//        this.connection.on(ConnectionEvents.Target_targetDestroyed, onTargetDestroyedListener);
+//        this.listeners.put(ConnectionEvents.Target_targetDestroyed, onTargetDestroyedListener);
+//
+//        Consumer<TargetInfoChangedEvent> onTargetInfoChangedListener = this::onTargetInfoChanged;
+//        this.connection.on(ConnectionEvents.Target_targetInfoChanged, onTargetInfoChangedListener);
+//        this.listeners.put(ConnectionEvents.Target_targetInfoChanged, onTargetInfoChangedListener);
 
         Consumer<CdpCDPSession> onSessionDetachedListener = this::onSessionDetached;
         this.connection.on(ConnectionEvents.sessionDetached, onSessionDetachedListener);

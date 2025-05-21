@@ -38,6 +38,7 @@ public class WebSocketTransportFactory implements Constant {
         }
         // 默认是60s的心跳机制
         WebSocketTransport client = new WebSocketTransport(URI.create(url), new Draft_6455(), headers, timeout);
+        client.setConnectionLostTimeout(30000000);
         //30s 连接的超时时间
         boolean connected = client.connectBlocking(timeout, TimeUnit.MILLISECONDS);
         if (!connected) {
