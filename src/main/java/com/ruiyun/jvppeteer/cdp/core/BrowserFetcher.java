@@ -488,7 +488,7 @@ public class BrowserFetcher {
                 process = new ProcessBuilder("/bin/sh", "-c", shellPath.toAbsolutePath() + " " + folderPath + " " + url + " " + archiveName + " " + executableName).redirectErrorStream(true).start();
             } else if (Helper.isWindows()) {
                 shellPath = copyShellFile(INSTALL_CHROME_FOR_TESTING_WIN);
-                process = new ProcessBuilder("powershell.exe", "-ExecutionPolicy", "Bypass", "-File", shellPath.toAbsolutePath().toString(), "-url", url, "-savePath", folderPath, "-archive", archiveName, "-executableName", executableName).redirectErrorStream(true).start();
+                process = new ProcessBuilder("powershell.exe", "-File", shellPath.toAbsolutePath().toString(), "-url", url, "-savePath", folderPath, "-archive", archiveName, "-executableName", executableName).redirectErrorStream(true).start();
             } else if (Helper.isMac()) {
                 shellPath = copyShellFile(INSTALL_CHROME_FOR_TESTING_MAC);
                 process = Runtime.getRuntime().exec(new String[]{"/bin/sh", "-c", shellPath.toAbsolutePath().toString()});
