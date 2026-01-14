@@ -48,7 +48,8 @@ import static com.ruiyun.jvppeteer.common.Constant.*;
  */
 public class BrowserFetcher {
 
-    private static final Logger logger = LoggerFactory.getLogger(BrowserFetcher.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(BrowserFetcher.class);
+
     private static final String LINUX = "linux64";
     private static final String MAC_ARM64 = "mac-arm64";
     private static final String MAC_X64 = "mac-x64";
@@ -158,7 +159,7 @@ public class BrowserFetcher {
         try {
             downloadWithTimeout(url, folderPath, archive(this.product, this.platform, revision));
         } catch (Exception e) {
-            logger.warn("Java download failed, falling back to shell: {}", e.getMessage());
+            LOGGER.warn("Java download failed, falling back to shell: {}", e.getMessage());
             executeShell(url, folderPath, archive(this.product, this.platform, revision), fileName(this.product,this.platform));
         }
 
@@ -339,13 +340,13 @@ public class BrowserFetcher {
         BufferedReader stdoutReader = null;
         try {
             if (Helper.isLinux()) {
-                shellPath = copyShellFile(INSTALL_CHROME_FOR_TESTING_LINUX);
+                shellPath = copyResourceFileToDirectory(INSTALL_CHROME_FOR_TESTING_LINUX, FileUtil.createProfileDir(SHELLS_PREFIX), "/scripts/");
                 process = new ProcessBuilder("/bin/sh", "-c", shellPath.toAbsolutePath() + " " + folderPath + " " + url + " " + archiveName + " " + executableName).redirectErrorStream(true).start();
             } else if (Helper.isWindows()) {
-                shellPath = copyShellFile(INSTALL_CHROME_FOR_TESTING_WIN);
-                process = new ProcessBuilder("powershell.exe", "-File", shellPath.toAbsolutePath().toString(), "-url", url, "-savePath", folderPath, "-archive", archiveName, "-executableName", executableName).redirectErrorStream(true).start();
+                shellPath = copyResourceFileToDirectory(INSTALL_CHROME_FOR_TESTING_WIN, FileUtil.createProfileDir(SHELLS_PREFIX), "/scripts/");
+                process = new ProcessBuilder("powershell.exe", "-ExecutionPolicy", "Bypass", "-File", shellPath.toAbsolutePath().toString(), "-url", url, "-savePath", folderPath, "-archive", archiveName, "-executableName", executableName).redirectErrorStream(true).start();
             } else if (Helper.isMac()) {
-                shellPath = copyShellFile(INSTALL_CHROME_FOR_TESTING_MAC);
+                shellPath = copyResourceFileToDirectory(INSTALL_CHROME_FOR_TESTING_MAC, FileUtil.createProfileDir(SHELLS_PREFIX), "/scripts/");
                 process = Runtime.getRuntime().exec(new String[]{"/bin/sh", "-c", shellPath.toAbsolutePath().toString()});
             } else {
                 throw new JvppeteerException("Unsupported platform: " + Helper.platform());
@@ -356,7 +357,7 @@ public class BrowserFetcher {
                 stderrReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8));
                 String stdoutLine;
                 while ((stdoutLine = stdoutReader.readLine()) != null) {
-                    logger.info(stdoutLine);
+                    LOGGER.info(stdoutLine);
                 }
                 // 等待进程完成
                 boolean exitCode = process.waitFor(10L, TimeUnit.MINUTES);
@@ -383,23 +384,31 @@ public class BrowserFetcher {
     private static String decode(String encoded) {
         return new String(Base64.getDecoder().decode(encoded));
     }
-
-    private Path copyShellFile(String path) throws IOException {
-        Path tempDirectory = Paths.get(FileUtil.createProfileDir(SHELLS_PREFIX));
-        Path shellPath = tempDirectory.resolve(path);
-        if (Helper.isMac() || Helper.isLinux()) {
-            Files.createFile(shellPath, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString(decode("cnd4cnd4cnd4"))));
+    /**
+     * 把resource文件复制到temp目录下
+     *
+     * @param name       复制的文件名
+     * @param targetDir     目标文件夹
+     * @param folderPath resource下的要复制的文件所在的目录
+     * @return 复制后的文件路径
+     * @throws IOException 创建文件失败
+     */
+    public static Path copyResourceFileToDirectory(String name, String targetDir, String folderPath) throws IOException {
+        Path targetPath = Paths.get(targetDir);
+        Path path = targetPath.resolve(name);
+        if (Helper.isUnixLike()) {
+            Files.createFile(path, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwxrwxrwx")));
         } else if (Helper.isWindows()) {
-            Files.createFile(shellPath);
+            Files.createFile(path);
         }
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(shellPath.toFile())); BufferedReader reader = new BufferedReader(new InputStreamReader(Objects.requireNonNull(this.getClass().getResourceAsStream("/scripts/" + path))))) {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(path.toFile())); BufferedReader reader = new BufferedReader(new InputStreamReader(Objects.requireNonNull(BrowserFetcher.class.getResourceAsStream(folderPath + name))))) {
             String line;
             while ((line = reader.readLine()) != null) {
                 writer.write(line);
                 writer.newLine();
             }
         }
-        return shellPath;
+        return path;
     }
 
     /**
@@ -436,8 +445,8 @@ public class BrowserFetcher {
         String executablePath = relativeExecutablePath(revision, versionPath);
         String url = getDownloadURL(this.product, this.platform, this.downloadHost, revision);
         boolean local = this.exists(executablePath);
-        if (logger.isDebugEnabled()) {
-            logger.debug("revision:{}, executablePath:{}, folderPath:{}, local:{}, url:{}, product:{}", revision, executablePath, versionPath, local, url, this.product);
+        if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("revision:{}, executablePath:{}, folderPath:{}, local:{}, url:{}, product:{}", revision, executablePath, versionPath, local, url, this.product);
         }
         return new RevisionInfo(revision, executablePath, versionPath, local, url, this.product);
     }

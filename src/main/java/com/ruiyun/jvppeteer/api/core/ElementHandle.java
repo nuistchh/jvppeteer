@@ -10,7 +10,6 @@ import com.ruiyun.jvppeteer.cdp.entities.BoxModel;
 import com.ruiyun.jvppeteer.cdp.entities.ClickOptions;
 import com.ruiyun.jvppeteer.cdp.entities.DragData;
 import com.ruiyun.jvppeteer.cdp.entities.ElementScreenshotOptions;
-import com.ruiyun.jvppeteer.cdp.entities.EvaluateType;
 import com.ruiyun.jvppeteer.cdp.entities.KeyPressOptions;
 import com.ruiyun.jvppeteer.cdp.entities.KeyboardTypeOptions;
 import com.ruiyun.jvppeteer.cdp.entities.Offset;
@@ -28,7 +27,6 @@ import com.ruiyun.jvppeteer.util.ValidateUtil;
 import java.io.IOException;
 import java.lang.reflect.Array;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -597,6 +595,8 @@ public abstract class ElementHandle extends JSHandle {
     private void intersectBoundingBox(BoundingBox box, double width, double height) {
         box.setWidth(Math.max(box.getX() >= 0 ? Math.min(width - box.getX(), box.getWidth()) : Math.min(width, box.getWidth() + box.getX()), 0));
         box.setHeight(Math.max(box.getY() >= 0 ? Math.min(height - box.getY(), box.getHeight()) : Math.min(height, box.getHeight() + box.getY()), 0));
+        box.setX(Math.max(box.getX(), 0));
+        box.setY(Math.max(box.getY(), 0));
     }
 
     /**
@@ -633,7 +633,48 @@ public abstract class ElementHandle extends JSHandle {
         ElementHandle wrapThis = this.adoptIsolatedHandle();
         wrapThis.scrollIntoViewIfNeeded();
         Point point = wrapThis.clickablePoint(options.getOffset());
-        wrapThis.frame().page().mouse().click(point.getX(), point.getY(), options);
+        try {
+            wrapThis.frame().page().mouse().click(point.getX(), point.getY(), options);
+        } finally {
+            if(options.getDebugHighlight()){
+                wrapThis.frame().page().evaluate("\n" +
+                        "(x, y) => {\n" +
+                        "    const highlight = document.createElement('div');\n" +
+                        "    highlight.innerHTML = `<style>\n" +
+                        "@scope {\n" +
+                        "  :scope {\n" +
+                        "      position: fixed;\n" +
+                        "      left: ${x}px;\n" +
+                        "      top: ${y}px;\n" +
+                        "      width: 10px;\n" +
+                        "      height: 10px;\n" +
+                        "      border-radius: 50%;\n" +
+                        "      animation: colorChange 10s 1 normal;\n" +
+                        "      animation-fill-mode: forwards;\n" +
+                        "  }\n" +
+                        "\n" +
+                        "  @keyframes colorChange {\n" +
+                        "      from {\n" +
+                        "          background-color: red;\n" +
+                        "      }\n" +
+                        "      to {\n" +
+                        "          background-color: #FADADD00;\n" +
+                        "      }\n" +
+                        "  }\n" +
+                        "}\n" +
+                        "</style>`;\n" +
+                        "    highlight.addEventListener(\n" +
+                        "      'animationend',\n" +
+                        "      () => {\n" +
+                        "        highlight.remove();\n" +
+                        "      },\n" +
+                        "      {once: true},\n" +
+                        "    );\n" +
+                        "    document.body.append(highlight);\n" +
+                        "  }\n",point.getX(), point.getY());
+            }
+        }
+
     }
 
     /**

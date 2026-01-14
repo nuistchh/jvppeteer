@@ -48,6 +48,7 @@ public enum ConnectionEvents {
     Network_loadingFinished("Network.loadingFinished"),
     Network_loadingFailed("Network.loadingFailed"),
     Network_responseReceivedExtraInfo("Network.responseReceivedExtraInfo"),
+    Network_requestWillBeSentExtraInfo("Network.requestWillBeSentExtraInfo"),
     Tracing_tracingComplete("Tracing.tracingComplete"),
     Input_dragIntercepted("Input.dragIntercepted"),
     /**
@@ -79,7 +80,9 @@ public enum ConnectionEvents {
     script_realmCreated("script.realmCreated"),
     script_realmDestroyed("script.realmDestroyed"),
     script_message("script.message"),
-    browsingContext_userPromptClosed("browsingContext.userPromptClosed");
+    browsingContext_userPromptClosed("browsingContext.userPromptClosed"),
+    input_fileDialogOpened("input.fileDialogOpened"),
+    bluetooth_requestDevicePromptUpdated("bluetooth.requestDevicePromptUpdated");
     private final String eventName;
 
     ConnectionEvents(String eventName) {

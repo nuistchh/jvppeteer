@@ -1,7 +1,9 @@
 package com.ruiyun.example;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.ruiyun.jvppeteer.api.core.Browser;
+import com.ruiyun.jvppeteer.api.core.BrowserContext;
+import com.ruiyun.jvppeteer.api.core.DeviceRequestPrompt;
 import com.ruiyun.jvppeteer.api.core.ElementHandle;
 import com.ruiyun.jvppeteer.api.core.Frame;
 import com.ruiyun.jvppeteer.api.core.JSHandle;
@@ -33,27 +35,31 @@ import com.ruiyun.jvppeteer.cdp.entities.Viewport;
 import com.ruiyun.jvppeteer.cdp.entities.VisionDeficiency;
 import com.ruiyun.jvppeteer.cdp.entities.WaitForNetworkIdleOptions;
 import com.ruiyun.jvppeteer.cdp.entities.WaitForSelectorOptions;
+import com.ruiyun.jvppeteer.common.AdapterState;
 import com.ruiyun.jvppeteer.common.AwaitableResult;
+import com.ruiyun.jvppeteer.common.BluetoothManufacturerData;
 import com.ruiyun.jvppeteer.common.MediaType;
+import com.ruiyun.jvppeteer.common.PreconnectedPeripheral;
 import com.ruiyun.jvppeteer.common.PredefinedNetworkConditions;
+import com.ruiyun.jvppeteer.common.ReloadOptions;
 import com.ruiyun.jvppeteer.common.ScreenRecorder;
+import com.ruiyun.jvppeteer.common.UserAgentOptions;
 import com.ruiyun.jvppeteer.common.WebPermission;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Objects;
 import java.util.TimeZone;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import org.junit.Test;
 
 
 import static com.ruiyun.example.A_LaunchTest.LAUNCHOPTIONS;
 import static com.ruiyun.jvppeteer.common.Constant.NETWORK_IDLE_TIME;
-import static com.ruiyun.jvppeteer.common.Constant.OBJECTMAPPER;
 
 public class S_PageApiTest {
     /**
@@ -286,12 +292,12 @@ public class S_PageApiTest {
         storage.add(token);
         Object tokens = page.evaluate("(storage) => {\n" +
                 "  return  parsel.stringify(storage);\n" +
-                "}",storage);
-        System.out.println("string "+ token);
+                "}", storage);
+        System.out.println("string " + token);
         boolean hasParselJsScript = (boolean) page.evaluate(" () => {\n" +
                 "  return !!document.querySelectorAll(\"#parsel-js\")\n" +
                 "}");
-        System.out.println("hasParselJsScript "+hasParselJsScript);
+        System.out.println("hasParselJsScript " + hasParselJsScript);
         elementHandle4.dispose();
         Thread.sleep(15000);
         browser.close();
@@ -595,31 +601,70 @@ public class S_PageApiTest {
     public void test13() throws Exception {
         Browser browser = Puppeteer.launch(LAUNCHOPTIONS);
         Page page = browser.newPage();
-//        page.setBypassCSP(true);
-//        page.setBypassServiceWorker(true);
-//        page.setCacheEnabled(true);
-//        page.goTo("https://www.baidu.com/?tn=68018901_16_pg");
-//        List<WebWorker> workers = page.workers();
-//        for (WebWorker worker : workers) {
-//            System.out.println("worker: " + worker.url());
-//        }
-        page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36");
-        Thread.sleep(2000);
-        page.focus("#hotsearch-content-wrapper > li:nth-child(1) > a");
-        Thread.sleep(2000);
-        page.hover("#hotsearch-content-wrapper > li:nth-child(2) > a");
-        Thread.sleep(2000);
-        page.tap("#hotsearch-content-wrapper > li:nth-child(1) > a");
-        Thread.sleep(2000);
-        page.bringToFront();
-        page.goTo("https://pptr.nodejs.cn/api/puppeteer.page.setuseragent");
-        page.goTo("https://www.geetest.com/demo/slide-en.html");
-        Thread.sleep(2000);
-        page.goBack();
-        Thread.sleep(2000);
-        page.goForward();
-        Thread.sleep(2000);
-        System.out.println("done...");
+        System.out.println("should work with options parameter...");
+        Object userAgent = page.evaluate("() => {\n" +
+                "          return navigator.userAgent;\n" +
+                "        }");
+        System.out.println("userAgent: " + userAgent);
+        page.setUserAgent("foobar");
+        new Thread(() -> {
+            try {
+                page.goTo("https://www.baidu.com");
+            } catch (ExecutionException | InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+        Request request = page.waitForRequest("https://www.baidu.com/");
+        System.out.println("userAgent equals: " + request.headers().stream().anyMatch(header -> header.getName().equals("user-agent") && header.getValue().equals("foobar")));
+        page.close();
+        System.out.println("should work with platform option...");
+        Page page2 = browser.newPage();
+        Object platform = page2.evaluate("() => {\n" +
+                "          return navigator.platform;\n" +
+                "        }");
+        System.out.println("platform: " + platform);
+        UserAgentOptions userAgentOptions = new UserAgentOptions();
+        userAgentOptions.setPlatform("MockPlatform");
+        userAgentOptions.setUserAgent("foobar");
+        page2.setUserAgent(userAgentOptions);
+        Object platform2 = page2.evaluate("() => {\n" +
+                "          return navigator.platform;\n" +
+                "        }");
+        System.out.println("platform: " + platform2);
+        new Thread(() -> {
+            try {
+                page2.goTo("https://www.baidu.com");
+            } catch (ExecutionException | InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+        Request request2 = page2.waitForRequest("https://www.baidu.com/");
+        System.out.println("userAgent equals: " + request2.headers().stream().anyMatch(header -> header.getName().equals("user-agent") && header.getValue().equals("foobar")));
+        System.out.println("should work with platform option without userAgent...");
+        Page page3 = browser.newPage();
+        Object originalUserAgent = page3.evaluate("() => {\n" +
+                "        return navigator.userAgent;\n" +
+                "      }");
+        Object platform3 = page3.evaluate("() => {\n" +
+                "          return navigator.platform;\n" +
+                "        }");
+        System.out.println("platform: " + platform3);
+        UserAgentOptions mockPlatform = new UserAgentOptions();
+        mockPlatform.setPlatform("MockPlatform");
+        page3.setUserAgent(mockPlatform);
+        boolean equals = page3.evaluate("() => {\n" +
+                "          return navigator.userAgent;\n" +
+                "        }").equals(originalUserAgent);
+        System.out.println("originalUserAgent equals: " + equals);
+        new Thread(() -> {
+            try {
+                page3.goTo("https://www.baidu.com");
+            } catch (ExecutionException | InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }).start();
+        Request request3 = page3.waitForRequest("https://www.baidu.com/");
+        System.out.println("userAgent equals: " + request3.headers().stream().anyMatch(header -> header.getName().equals("user-agent") && header.getValue().equals(originalUserAgent)));
         browser.close();
     }
 
@@ -627,10 +672,10 @@ public class S_PageApiTest {
     public void test14() throws Exception {
         Browser browser = Puppeteer.launch(LAUNCHOPTIONS);
         Page page = browser.newPage();
-        page.goTo("https://smallpdf.com/cn/pdf-to-word");
+        page.goTo("https://www.pdf.to/word/?lang=zh");
         //webdriver bidi不支持
         AwaitableResult<FileChooser> result = page.fileChooserWaitFor();
-        page.click("#app > div > div:nth-child(1) > header > div.rh8nkv-3.gcKsMX > div > div > label > form > label > div > div.sc-8s01yt-1.XegmY > div.l3tlg0-5.ekSdZR > button.l3tlg0-0.ggoliT");
+        page.click("#text > span");
         FileChooser fileChooser = result.waitingGetResult();
         //上传文件
         fileChooser.accept(Arrays.asList("C:\\Users\\fanyong\\Pictures\\Saved Pictures\\1.jpg", "C:\\Users\\fanyong\\Pictures\\Saved Pictures\\2.jpg"));
@@ -639,6 +684,19 @@ public class S_PageApiTest {
         AwaitableResult<FileChooser> result2 = page.fileChooserWaitFor();
         page.click("#app > div > div > div.sc-1lrg9x7-1.llrKYu > div.sc-1lrg9x7-2.WzjRx > div.sc-1lrg9x7-3.yLQpw > div > div.sc-1dnebxo-1.jYoHNJ > div > div.g1gmt0-1.eXUQYI > button");
         result2.waitingGetResult().accept(Collections.singletonList("C:\\Users\\fanyong\\Pictures\\Saved Pictures\\IMG_20180820_174844.jpg"));
+        Thread.sleep(10000);
+        browser.close();
+    }
+
+    @Test
+    public void test145() throws Exception {
+        Browser browser = Puppeteer.launch(LAUNCHOPTIONS);
+        Page page = browser.newPage();
+        page.setContent("<input type=file oninput='javascript:console.timeStamp()'>");
+        AwaitableResult<FileChooser> fileChooserWaitFor = page.fileChooserWaitFor();
+        page.click("input");
+        FileChooser fileChooser = fileChooserWaitFor.waitingGetResult(30, TimeUnit.SECONDS);
+        fileChooser.accept(Collections.singletonList("C:\\Users\\fanyong\\Pictures\\Saved Pictures\\1.jpg"));
         Thread.sleep(10000);
         browser.close();
     }
@@ -863,6 +921,20 @@ public class S_PageApiTest {
         Thread.sleep(5000);
     }
 
+
+    @Test
+    public void test230() throws Exception {
+        Browser browser = Puppeteer.launch(LAUNCHOPTIONS);
+        Page page = browser.newPage();
+        page.goTo("https://www.baidu.com/");
+        //selector => !!document.querySelector(selector) 返回的就是true或者false
+        ElementHandle handle = page.$("#su");
+        Object jsHandle = page.evaluate("ele => ele.className", handle);
+        System.out.println(jsHandle);
+//        browser.close();
+        Thread.sleep(5000);
+    }
+
     /**
      * Page.waitForFunction()
      */
@@ -1041,7 +1113,7 @@ public class S_PageApiTest {
     }
 
     /**
-     * 录制屏幕某个区域 录制格式gif
+     * 录制屏幕某个区域 录制格式mp4
      */
     @Test
     public void test31() throws Exception {
@@ -1079,6 +1151,145 @@ public class S_PageApiTest {
         page.goTo("https://www.baidu.com");
         page.waitForNetworkIdle(new WaitForNetworkIdleOptions(NETWORK_IDLE_TIME, 2, null));
         System.out.println("完成拉2");
+    }
+
+    /**
+     * waitForNetworkIdle
+     *
+     * @throws Exception 异常
+     */
+    @Test
+    public void test32() throws Exception {
+        List<String> args = new ArrayList<>();
+        args.add("--enable-features=WebBluetoothNewPermissionsBackend");
+        args.add("--enable-features=WebBluetooth");
+        LAUNCHOPTIONS.setArgs(args);
+        Browser Browser = Puppeteer.launch(LAUNCHOPTIONS);
+        Page page = Browser.newPage();
+        page.goTo("https://www.geetest.com/demo/slide-en.html");
+        page.bluetooth().emulateAdapter(AdapterState.poweredOn);
+        page.bluetooth().simulatePreconnectedPeripheral(new PreconnectedPeripheral("09:09:09:09:09:09", "SOME_NAME", Collections.singletonList(new BluetoothManufacturerData(17, "AP8BAX8=")), Collections.singletonList("12345678-1234-5678-9abc-def123456789")));
+        new Thread(() -> {
+            DeviceRequestPrompt deviceRequestPrompt = page.waitForDevicePrompt();
+            deviceRequestPrompt.cancel();
+            System.out.println("取消了");
+        }).start();
+        try {
+            page.evaluate("async function triggerBluetoothDevicePrompt() {\n" +
+                    "  const device = await navigator.bluetooth.requestDevice({\n" +
+                    "    acceptAllDevices: true,\n" +
+                    "    optionalServices: [],\n" +
+                    "  });\n" +
+                    "  return device.name;\n" +
+                    "}");
+
+        } catch (JsonProcessingException e) {
+            System.out.println(e.getMessage());
+        }
+    }
+
+    /**
+     * Page.openDevTools()
+     *
+     * @throws Exception 异常
+     */
+    @Test
+    public void test33() throws Exception {
+        Browser browser = Puppeteer.launch(LAUNCHOPTIONS);
+        Page page = browser.newPage();
+        page.goTo("about:blank");
+        Page openDevTools = page.openDevTools();
+        openDevTools.waitForFunction("() => {\n" +
+                "      // @ts-expect-error wrong context.\n" +
+                "      return Boolean(window.DevToolsAPI);\n" +
+                "    }");
+        Thread.sleep(5000);
+        browser.close();
+    }
+
+    /**
+     * Page.reload() 还不能跑通，可能缺少对应的环境
+     *
+     * @throws Exception 异常
+     */
+    @Test
+    public void test34() throws Exception {
+        Browser browser = Puppeteer.launch(LAUNCHOPTIONS);
+        Page page = browser.newPage();
+        page.on(PageEvents.Request, (Consumer<Request>) request -> {
+            System.out.println(request.url());
+        });
+        page.goTo("http://localhost:8080/one-style.html");
+        new Thread(() -> {
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            ReloadOptions reloadOptions = new ReloadOptions();
+            reloadOptions.setIgnoreCache(true);
+            page.reload(reloadOptions);
+        }).start();
+        Predicate<Request> predicate = rq -> rq.url().contains("/cached/one-style.html");
+        Request request = page.waitForRequest(predicate);
+        boolean b = request.headers().stream().anyMatch(headerEntry -> headerEntry.getName().equals("if-modified-since"));
+        System.out.println("b=" + b);
+        new Thread(() -> {
+            ReloadOptions reloadOptions = new ReloadOptions();
+            reloadOptions.setIgnoreCache(true);
+            page.reload(reloadOptions);
+        }).start();
+        Request request2 = page.waitForRequest("/cached/one-style.html");
+        boolean b2 = request2.headers().stream().anyMatch(headerEntry -> headerEntry.getName().equals("if-modified-since"));
+        System.out.println("b2=" + b);
+        browser.close();
+    }
+
+    /**
+     * Page.reload()
+     *
+     * @throws Exception 异常
+     */
+    @Test
+    public void test35() throws Exception {
+        Browser browser = Puppeteer.launch(LAUNCHOPTIONS);
+        BrowserContext context = browser.createBrowserContext();
+        Page page = browser.newPage();
+        page.emulateFocusedPage(true);
+        Page page2 = context.newPage();
+        page2.bringToFront();
+        System.out.println(page.evaluate("() => {\n" +
+                "          return document.hasFocus();\n" +
+                "        }"));
+
+        page.emulateFocusedPage(false);
+        System.out.println(page.evaluate("() => {\n" +
+                "          return document.hasFocus();\n" +
+                "        }"));
+    }
+
+    /**
+     * Page.resize()
+     *
+     * @throws Exception 异常
+     */
+    @Test
+    public void test36() throws Exception {
+        Browser browser = Puppeteer.launch(LAUNCHOPTIONS);
+        BrowserContext context = browser.defaultBrowserContext();
+        Page page = context.newPage();
+        page.setViewport(null);
+        page.evaluate("() => {\n" +
+                "        return new Promise(resolve => {\n" +
+                "          window.onresize = resolve;\n" +
+                "        });\n" +
+                "      }");
+        page.resize(500, 400);
+        Object innerSize = page.evaluate("() => {\n" +
+                "        return {width: window.innerWidth, height: window.innerHeight};\n" +
+                "      }");
+        //innerSize.width = 500;innerSize.height = 400;
+        System.out.println(innerSize);
     }
 
 }

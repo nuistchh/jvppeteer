@@ -9,11 +9,11 @@ import com.ruiyun.jvppeteer.api.events.ConnectionEvents;
 import com.ruiyun.jvppeteer.cdp.entities.TargetInfo;
 import com.ruiyun.jvppeteer.common.Constant;
 import com.ruiyun.jvppeteer.common.ParamsFactory;
+import com.ruiyun.jvppeteer.exception.ConnectionClosedException;
 import com.ruiyun.jvppeteer.exception.JvppeteerException;
 import com.ruiyun.jvppeteer.exception.ProtocolException;
 import com.ruiyun.jvppeteer.util.Helper;
 import com.ruiyun.jvppeteer.util.StringUtil;
-import com.ruiyun.jvppeteer.util.ValidateUtil;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -115,10 +115,11 @@ public class CdpConnection extends Connection {
         return !this.manuallyAttached.remove(targetId);
     }
 
-    public JsonNode rawSend(String method, Object params, String sessionId, Integer timeout,
-                            boolean isBlocking) {
-        ValidateUtil.assertArg(!this.closed, "Protocol error: Connection closed.");
-        if (timeout == null) {
+    public JsonNode rawSend(String method, Object params, String sessionId, Integer timeout, boolean isBlocking) {
+        if (this.closed) {
+            throw new ConnectionClosedException("Connection closed.");
+        }
+        if (Objects.isNull(timeout)) {
             timeout = this.timeout;
         }
         Callback callback = new Callback(this.id.incrementAndGet(), method, timeout);
@@ -240,7 +241,7 @@ public class CdpConnection extends Connection {
 
     public void dispose() {
         this.onClose();//清理Connection资源
-        this.transport.close();//关闭websocket
+        this.transport.close();//关闭连接（pipe or websocket）
     }
 
     public void onClose() {

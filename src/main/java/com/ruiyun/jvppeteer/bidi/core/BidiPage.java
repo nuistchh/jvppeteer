@@ -2,7 +2,9 @@ package com.ruiyun.jvppeteer.bidi.core;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.ruiyun.jvppeteer.api.core.BluetoothEmulation;
 import com.ruiyun.jvppeteer.api.core.CDPSession;
+import com.ruiyun.jvppeteer.api.core.DeviceRequestPrompt;
 import com.ruiyun.jvppeteer.api.core.EventEmitter;
 import com.ruiyun.jvppeteer.api.core.JSHandle;
 import com.ruiyun.jvppeteer.api.core.Keyboard;
@@ -21,6 +23,7 @@ import com.ruiyun.jvppeteer.bidi.entities.BytesValue;
 import com.ruiyun.jvppeteer.bidi.entities.CaptureScreenshotOptions;
 import com.ruiyun.jvppeteer.bidi.entities.ClipRectangle;
 import com.ruiyun.jvppeteer.bidi.entities.CookieFilter;
+import com.ruiyun.jvppeteer.bidi.entities.GeolocationCoordinates;
 import com.ruiyun.jvppeteer.bidi.entities.GetCookiesOptions;
 import com.ruiyun.jvppeteer.bidi.entities.ImageFormat;
 import com.ruiyun.jvppeteer.bidi.entities.InterceptPhase;
@@ -32,12 +35,12 @@ import com.ruiyun.jvppeteer.bidi.entities.PrintOptions;
 import com.ruiyun.jvppeteer.bidi.entities.PrintPageParameters;
 import com.ruiyun.jvppeteer.bidi.entities.ReloadParameters;
 import com.ruiyun.jvppeteer.bidi.entities.RemoteValue;
+import com.ruiyun.jvppeteer.bidi.entities.ScreenOrientation;
+import com.ruiyun.jvppeteer.bidi.entities.ScreenOrientationNatural;
+import com.ruiyun.jvppeteer.bidi.entities.ScreenOrientationType;
+import com.ruiyun.jvppeteer.bidi.entities.SetGeoLocationOverrideOptions;
 import com.ruiyun.jvppeteer.bidi.entities.SetViewportParameters;
-import com.ruiyun.jvppeteer.common.AwaitableResult;
-import com.ruiyun.jvppeteer.common.BindingFunction;
-import com.ruiyun.jvppeteer.common.DeviceRequestPrompt;
-import com.ruiyun.jvppeteer.common.MediaType;
-import com.ruiyun.jvppeteer.common.ParamsFactory;
+import com.ruiyun.jvppeteer.bidi.events.FileDialogInfo;
 import com.ruiyun.jvppeteer.cdp.core.Accessibility;
 import com.ruiyun.jvppeteer.cdp.core.Coverage;
 import com.ruiyun.jvppeteer.cdp.core.EmulationManager;
@@ -66,8 +69,13 @@ import com.ruiyun.jvppeteer.cdp.entities.ScreenshotOptions;
 import com.ruiyun.jvppeteer.cdp.entities.UserAgentMetadata;
 import com.ruiyun.jvppeteer.cdp.entities.Viewport;
 import com.ruiyun.jvppeteer.cdp.entities.VisionDeficiency;
-import com.ruiyun.jvppeteer.cdp.entities.WaitForOptions;
-import com.ruiyun.jvppeteer.exception.EvaluateException;
+import com.ruiyun.jvppeteer.common.AwaitableResult;
+import com.ruiyun.jvppeteer.common.BindingFunction;
+import com.ruiyun.jvppeteer.common.MediaType;
+import com.ruiyun.jvppeteer.common.ParamsFactory;
+import com.ruiyun.jvppeteer.common.ReloadOptions;
+import com.ruiyun.jvppeteer.common.UserAgentOptions;
+import com.ruiyun.jvppeteer.common.WaitForOptions;
 import com.ruiyun.jvppeteer.util.Base64Util;
 import com.ruiyun.jvppeteer.util.FileUtil;
 import com.ruiyun.jvppeteer.util.Helper;
@@ -101,7 +109,6 @@ import static com.ruiyun.jvppeteer.util.Helper.convertCookiesSameSiteCdpToBiDi;
 import static com.ruiyun.jvppeteer.util.Helper.rewriteNavigationError;
 
 public class BidiPage extends Page {
-    List<HeaderEntry> userAgentHeaders;
     List<HeaderEntry> extraHTTPHeaders;
     private final TrustedEmitter<PageEvents> trustedEmitter = new TrustedEmitter<>();
     private final BidiBrowserContext browserContext;
@@ -115,12 +122,12 @@ public class BidiPage extends Page {
     private final Coverage coverage;
     private final EmulationManager cdpEmulationManager;
     private InternalNetworkConditions emulatedNetworkConditions;
-    private String userAgentInterception;
-    private String userAgentPreloadScript;
+    private String overrideNavigatorPropertiesPreloadScript;
     Credentials credentials;
-    private String userInterception;
     private String authInterception;
     private String extraHeadersInterception;
+    private final Set<AwaitableResult<FileChooser>> fileChooserResults = new HashSet<>();
+    private String requestInterception;
 
     private BidiPage(BidiBrowserContext browserContext, BrowsingContext browsingContext) {
         super();
@@ -156,25 +163,25 @@ public class BidiPage extends Page {
     }
 
     @Override
-    public void setUserAgent(String userAgent, UserAgentMetadata userAgentMetadata) {
-        if (!this.browserContext.browser().cdpSupported() && Objects.nonNull(userAgentMetadata)) {
-            throw new UnsupportedOperationException(
-                    "Current Browser does not support " + userAgentMetadata);
-        } else if (this.browserContext.browser().cdpSupported() && Objects.nonNull(userAgentMetadata)) {
-            Map<String, Object> params = ParamsFactory.create();
-            params.put("userAgent", userAgent);
-            params.put("userAgentMetadata", userAgentMetadata);
-            this.client().send("Network.setUserAgentOverride", params);
-        }
-        boolean enable = !Objects.equals(userAgent, "");
+    public void setUserAgent(UserAgentOptions options) {
+        String userAgent = options.getUserAgent();
+        String platform = options.getPlatform();
+        UserAgentMetadata metadata = options.getUserAgentMetadata();
         if (Objects.isNull(userAgent)) {
             userAgent = this.browserContext.browser().userAgent();
         }
-        this.userAgentHeaders = new ArrayList<>();
-        if (enable) {
-            this.userAgentHeaders.add(new HeaderEntry("User-Agent", userAgent));
+        if (!this.browserContext.browser().cdpSupported() && (Objects.nonNull(metadata) || Objects.nonNull(platform))) {
+            throw new UnsupportedOperationException(
+                    "Current Browser does not support `userAgentMetadata` or `platform`");
+        } else if (this.browserContext.browser().cdpSupported() && (Objects.nonNull(metadata) || Objects.nonNull(platform))) {
+            Map<String, Object> params = ParamsFactory.create();
+            params.put("userAgent", userAgent);
+            params.put("userAgentMetadata", metadata);
+            params.put("platform", platform);
+            this.client().send("Network.setUserAgentOverride", params);
         }
-        this.userAgentInterception = this.toggleInterception(Collections.singletonList(InterceptPhase.BEFORE_REQUEST_SENT.toString()), this.userAgentInterception, enable);
+        boolean enable = !Objects.equals(userAgent, "");
+        this.frame.browsingContext.setUserAgent(enable ? userAgent : null);
         List<BidiFrame> frames = new ArrayList<>();
         frames.add(this.frame);
         Iterator<BidiFrame> iterator = frames.iterator();
@@ -182,30 +189,35 @@ public class BidiPage extends Page {
             BidiFrame frame = iterator.next();
             frames.addAll(frame.childFrames());
         }
-            if (StringUtil.isNotEmpty(this.userAgentPreloadScript)) {
-            this.removeScriptToEvaluateOnNewDocument(this.userAgentPreloadScript);
+        if (StringUtil.isNotEmpty(this.overrideNavigatorPropertiesPreloadScript)) {
+            this.removeScriptToEvaluateOnNewDocument(this.overrideNavigatorPropertiesPreloadScript);
         }
 
         if (enable) {
             try {
-                NewDocumentScriptEvaluation evaluateToken = this.evaluateOnNewDocument("(userAgent) => {\n" +
-                        "  Object.defineProperty(navigator, 'userAgent', {\n" +
-                        "    value: userAgent,\n" +
-                        "    configurable: true,\n" +
-                        "  });\n" +
-                        "}", EvaluateType.STRING, userAgent);
-                this.userAgentPreloadScript = evaluateToken.getIdentifier();
+                NewDocumentScriptEvaluation evaluateToken = this.evaluateOnNewDocument("(platform) => {\n" +
+                        "  if (platform) {\n" +
+                        "    Object.defineProperty(navigator, 'platform', {\n" +
+                        "      value: platform,\n" +
+                        "      configurable: true,\n" +
+                        "    });\n" +
+                        "  }\n" +
+                        "};", EvaluateType.STRING, platform);
+                this.overrideNavigatorPropertiesPreloadScript = evaluateToken.getIdentifier();
             } catch (JsonProcessingException e) {
                 LOGGER.error("Failed to evaluate userAgent", e);
             }
         }
         for (BidiFrame frame : frames) {
             try {
-                frame.evaluate("(userAgent) => {\n" +
-                        "  Object.defineProperty(navigator, 'userAgent', {\n" +
-                        "    value: userAgent,\n" +
-                        "  });\n" +
-                        "}", Collections.singletonList(userAgent));
+                frame.evaluate("(platform) => {\n" +
+                        "  if (platform) {\n" +
+                        "    Object.defineProperty(navigator, 'platform', {\n" +
+                        "      value: platform,\n" +
+                        "      configurable: true,\n" +
+                        "    });\n" +
+                        "  }\n" +
+                        "};", Collections.singletonList(platform));
             } catch (Exception e) {
                 LOGGER.error("Failed to evaluate frame", e);
             }
@@ -302,10 +314,17 @@ public class BidiPage extends Page {
     }
 
     @Override
-    public BidiResponse reload(WaitForOptions options) {
+    public Page openDevTools() {
+        throw new UnsupportedOperationException("Method not implemented for WebDriver BiDi yet.");
+    }
+
+    @Override
+    public BidiResponse reload(ReloadOptions options) {
         Runnable navigationRunner = () -> {
             try {
-                this.frame.browsingContext.reload(new ReloadParameters());
+                ReloadParameters reloadParameters = new ReloadParameters();
+                reloadParameters.setIgnoreCache(options.getIgnoreCache());
+                this.frame.browsingContext.reload(reloadParameters);
             } catch (Exception e) {
                 rewriteNavigationError(this.url(), Objects.isNull(options.getTimeout()) ? this._timeoutSettings.navigationTimeout() : options.getTimeout(), e);
             }
@@ -335,17 +354,24 @@ public class BidiPage extends Page {
 
     @Override
     public boolean isJavaScriptEnabled() {
-        return this.cdpEmulationManager.javascriptEnabled();
+        return this.frame.browsingContext.isJavaScriptEnabled();
     }
 
     @Override
     public void setGeolocation(GeolocationOptions options) {
-        this.cdpEmulationManager.setGeolocation(options);
+        super.setGeolocation(options);
+        SetGeoLocationOverrideOptions setGeoLocationOverrideOptions = new SetGeoLocationOverrideOptions();
+        GeolocationCoordinates coordinates = new GeolocationCoordinates();
+        coordinates.setLatitude(options.getLatitude());
+        coordinates.setLongitude(options.getLongitude());
+        coordinates.setAccuracy(options.getAccuracy());
+        setGeoLocationOverrideOptions.setCoordinates(coordinates);
+        this.frame.browsingContext.setGeolocationOverride(setGeoLocationOverrideOptions);
     }
 
     @Override
     public void setJavaScriptEnabled(boolean enabled) {
-        this.cdpEmulationManager.setJavaScriptEnabled(enabled);
+        this.frame.browsingContext.setJavaScriptEnabled(enabled);
     }
 
     @Override
@@ -365,7 +391,7 @@ public class BidiPage extends Page {
 
     @Override
     public void emulateTimezone(String timezoneId) {
-        this.cdpEmulationManager.emulateTimezone(timezoneId);
+        this.frame.browsingContext.setTimezoneOverride(timezoneId);
     }
 
     @Override
@@ -388,7 +414,18 @@ public class BidiPage extends Page {
             if (Objects.nonNull(viewport) && viewport.getDeviceScaleFactor() != null) {
                 options.setDevicePixelRatio(viewport.getDeviceScaleFactor());
             }
+
+            ScreenOrientation screenOrientation = null;
+
+            if (viewport != null) {
+                if (viewport.getIsLandscape()) {
+                    screenOrientation = new ScreenOrientation(ScreenOrientationNatural.Landscape, ScreenOrientationType.LandscapePrimary);
+                } else {
+                    screenOrientation = new ScreenOrientation(ScreenOrientationNatural.Portrait, ScreenOrientationType.PortraitPrimary);
+                }
+            }
             this.frame.browsingContext.setViewport(options);
+            this.frame.browsingContext.setScreenOrientationOverride(screenOrientation);
             this.viewport = viewport;
             return;
         }
@@ -532,6 +569,11 @@ public class BidiPage extends Page {
     }
 
     @Override
+    public void emulateFocusedPage(boolean enabled) {
+        this.cdpEmulationManager.emulateFocus(enabled);
+    }
+
+    @Override
     public CDPSession createCDPSession() {
         return this.frame.createCDPSession();
     }
@@ -606,7 +648,30 @@ public class BidiPage extends Page {
 
     @Override
     public AwaitableResult<FileChooser> fileChooserWaitFor() {
-        throw new UnsupportedOperationException();
+        AwaitableResult<FileChooser> result = AwaitableResult.create();
+        this.fileChooserResults.add(result);
+        this.frame.browsingContext.once(BrowsingContext.BrowsingContextEvents.filedialogopened, (Consumer<FileDialogInfo>) info -> {
+            if (Objects.isNull(info.getElement())) {
+                return;
+            }
+            RemoteValue value = new RemoteValue();
+            value.setSharedId(info.getElement().getSharedId());
+            value.setHandle(info.getElement().getHandle());
+            value.setType("node");
+            System.out.println("来了，卧槽");
+            FileChooser chooser = new FileChooser(BidiElementHandle.from(value, this.frame.mainRealm()), info.getMultiple());
+            Iterator<AwaitableResult<FileChooser>> iterator = this.fileChooserResults.iterator();
+            while (iterator.hasNext()) {
+                AwaitableResult<FileChooser> awaitableResult = iterator.next();
+                awaitableResult.onSuccess(chooser);
+                iterator.remove();
+            }
+        });
+        return result;
+    }
+
+    public boolean isNetworkInterceptionEnabled() {
+        return StringUtil.isNotEmpty(this.requestInterception) || StringUtil.isNotEmpty(this.authInterception);
     }
 
     @Override
@@ -616,18 +681,12 @@ public class BidiPage extends Page {
 
     @Override
     public void setRequestInterception(boolean enable) {
-        this.userInterception = this.toggleInterception(Collections.singletonList(InterceptPhase.BEFORE_REQUEST_SENT.toString()), this.userInterception, enable);
+        this.requestInterception = this.toggleInterception(Collections.singletonList(InterceptPhase.BEFORE_REQUEST_SENT.toString()), this.requestInterception, enable);
     }
 
     @Override
     public void setExtraHTTPHeaders(Map<String, String> headers) {
-        List<HeaderEntry> extraHTTPHeaders = new ArrayList<>();
-        headers.forEach((key, value) -> extraHTTPHeaders.add(new HeaderEntry(key.toLowerCase(), value)));
-        this.extraHTTPHeaders = extraHTTPHeaders;
-        this.extraHeadersInterception = this.toggleInterception(
-                Collections.singletonList(InterceptPhase.BEFORE_REQUEST_SENT.toString()),
-                this.extraHeadersInterception,
-                !extraHTTPHeaders.isEmpty());
+        this.frame.browsingContext.setExtraHTTPHeaders(headers);
     }
 
     @Override
@@ -654,9 +713,8 @@ public class BidiPage extends Page {
     @Override
     public void setOfflineMode(boolean enabled) {
         if (!this.browserContext.browser().cdpSupported()) {
-            throw new UnsupportedOperationException();
+            this.frame.browsingContext.setOfflineMode(enabled);
         }
-
         if (Objects.isNull(this.emulatedNetworkConditions)) {
             this.emulatedNetworkConditions = new InternalNetworkConditions(false, -1, -1, 0);
         }
@@ -667,11 +725,19 @@ public class BidiPage extends Page {
     @Override
     public void emulateNetworkConditions(NetworkConditions networkConditions) {
         if (!this.browserContext.browser().cdpSupported()) {
-            throw new UnsupportedOperationException();
+            // Check if trying to set network throttling without offline mode
+            if ((networkConditions == null || !networkConditions.getOffline()) && (networkConditions.getUpload() >= 0 || networkConditions.getDownload() >= 0 || networkConditions.getLatency() > 0)) {
+                throw new UnsupportedOperationException("WebDriver BiDi only supports offline mode");
+            }
+            // Set offline mode
+            boolean offline = networkConditions != null ? networkConditions.getOffline() : false;
+            this.frame.browsingContext.setOfflineMode(offline);
+            return;
         }
         if (Objects.isNull(this.emulatedNetworkConditions)) {
-            this.emulatedNetworkConditions = new InternalNetworkConditions(false, -1, -1, 0);
+            this.emulatedNetworkConditions = new InternalNetworkConditions(networkConditions != null ? networkConditions.getOffline() : false, -1, -1, 0);
         }
+        this.emulatedNetworkConditions.setOffline(Objects.nonNull(networkConditions) ? networkConditions.getOffline() : false);
         this.emulatedNetworkConditions.setUpload(Objects.nonNull(networkConditions) ? networkConditions.getUpload() : -1);
         this.emulatedNetworkConditions.setDownload(Objects.nonNull(networkConditions) ? networkConditions.getDownload() : -1);
         this.emulatedNetworkConditions.setLatency(Objects.nonNull(networkConditions) ? networkConditions.getLatency() : 0);
@@ -774,21 +840,18 @@ public class BidiPage extends Page {
     }
 
     private Response go(int delta, WaitForOptions options) {
-        try {
-            return this.waitForNavigation(options, () -> {
-                this.frame.browsingContext.traverseHistory(delta);
-            });
-        } catch (Exception e) {
-            if (e instanceof EvaluateException && e.getMessage().contains("no such history entry")) {
-                return null;
-            }
-            throw e;
-        }
+        return this.waitForNavigation(options, () -> {
+            this.frame.browsingContext.traverseHistory(delta);
+        });
     }
 
     @Override
     public DeviceRequestPrompt waitForDevicePrompt(int timeout) {
-        throw new UnsupportedOperationException();
+        return this.mainFrame().waitForDevicePrompt(timeout);
+    }
+
+    public BluetoothEmulation bluetooth() {
+        return this.mainFrame().browsingContext.bluetooth();
     }
 
     private boolean testUrlMatchCookie(List<String> urls, Cookie cookie) {
@@ -892,6 +955,16 @@ public class BidiPage extends Page {
     @Override
     public Mouse mouse() {
         return this.mouse;
+    }
+
+    @Override
+    public void resize(int contentWidth, int contentHeight) {
+        throw new UnsupportedOperationException("Method not implemented for WebDriver BiDi yet.");
+    }
+
+    @Override
+    public int windowId() {
+        throw new UnsupportedOperationException("Method not implemented for WebDriver BiDi yet.");
     }
 
 

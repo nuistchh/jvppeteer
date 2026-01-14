@@ -1,5 +1,6 @@
 package com.ruiyun.jvppeteer.cdp.entities;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.ruiyun.jvppeteer.api.core.ElementHandle;
 import java.util.List;
 
@@ -58,10 +59,16 @@ public class SerializedAXNode {
     private String invalid;
 
     private String orientation;
+    /**
+     * Url for link elements.
+     */
+    private String url;
 
     private List<SerializedAXNode> children;
-
+    @JsonIgnore
     private ElementHandle elementHandle;
+
+    private Integer backendNodeId;
 
     public String getRole() {
         return role;
@@ -274,8 +281,25 @@ public class SerializedAXNode {
     public void setElementHandle(ElementHandle elementHandle) {
         this.elementHandle = elementHandle;
     }
+
     public ElementHandle getElementHandle() {
         return elementHandle;
+    }
+
+    public Integer getBackendNodeId() {
+        return backendNodeId;
+    }
+
+    public void setBackendNodeId(Integer backendNodeId) {
+        this.backendNodeId = backendNodeId;
+    }
+
+    public String getUrl() {
+        return url;
+    }
+
+    public void setUrl(String url) {
+        this.url = url;
     }
 
     @Override
@@ -306,8 +330,12 @@ public class SerializedAXNode {
                 ", haspopup='" + haspopup + '\'' +
                 ", invalid='" + invalid + '\'' +
                 ", orientation='" + orientation + '\'' +
+                ", url='" + url + '\'' +
                 ", children=" + children +
                 ", elementHandle=" + elementHandle +
+                ", backendNodeId=" + backendNodeId +
                 '}';
     }
+
+
 }

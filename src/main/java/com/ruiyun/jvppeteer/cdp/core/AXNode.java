@@ -1,6 +1,7 @@
 package com.ruiyun.jvppeteer.cdp.core;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.ruiyun.jvppeteer.api.core.ElementHandle;
 import com.ruiyun.jvppeteer.api.core.Realm;
 import com.ruiyun.jvppeteer.cdp.entities.AXProperty;
 import com.ruiyun.jvppeteer.cdp.entities.SerializedAXNode;
@@ -11,9 +12,11 @@ import java.beans.PropertyDescriptor;
 import java.lang.reflect.InvocationTargetException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Predicate;
 
 public class AXNode {
@@ -36,7 +39,8 @@ public class AXNode {
             "description",
             "keyshortcuts",
             "roledescription",
-            "valuetext"
+            "valuetext",
+            "url"
     };
     private static final String[] booleanProperties = new String[]{
             "disabled",
@@ -162,9 +166,7 @@ public class AXNode {
         // Here and below: Android heuristics
         if (this.hasFocusableChild())
             return false;
-        if (this.focusable && StringUtil.isNotEmpty(this.name))
-            return true;
-        return "heading".equals(this.role) && StringUtil.isNotEmpty(this.name);
+        return Objects.equals(this.role, "heading") && StringUtil.isNotEmpty(this.name);
     }
 
     public boolean isControl() {
@@ -195,19 +197,37 @@ public class AXNode {
                 return false;
         }
     }
+    public boolean isLandmark() {
+        switch (this.role) {
+            case "banner":
+            case "complementary":
+            case "contentinfo":
+            case "form":
+            case "main":
+            case "navigation":
+            case "region":
+            case "search":
+                return true;
+            default:
+                return false;
+        }
+    }
 
     public boolean isInteresting(boolean insideControl) {
         if ("Ignored".equals(this.role) || this.hidden || this.ignored)
             return false;
 
+        if (this.isLandmark())
+            return true;
+
         if (this.focusable || this.richlyEditable)
             return true;
 
-        // If it's not focusable but has a control role, then it's interesting.
+        // If it"s not focusable but has a control role, then it"s interesting.
         if (this.isControl())
             return true;
 
-        // A non focusable child of a control is not interesting
+        // A non-focusable child of a control is not interesting
         if (insideControl)
             return false;
 
@@ -234,8 +254,11 @@ public class AXNode {
         if (this.payload.getBackendDOMNodeId() == null) {
             node.setElementHandle(null);
         }
-        node.setElementHandle(this.realm.adoptBackendNode(this.payload.getBackendDOMNodeId()).asElement());
-
+        ElementHandle handle = this.realm.adoptBackendNode(this.payload.getBackendDOMNodeId()).asElement();
+        node.setElementHandle(handle.evaluateHandle("node => {\n" +
+                "  return node.nodeType === Node.TEXT_NODE ? node.parentElement : node;\n" +
+                "}").asElement());
+        node.setBackendNodeId(this.payload.getBackendDOMNodeId());
         for (String userStringProperty : userStringProperties) {
             if (!properties.containsKey(userStringProperty))
                 continue;
@@ -244,7 +267,7 @@ public class AXNode {
         }
 
         for (String booleanProperty : booleanProperties) {
-            // WebArea's treat focus differently than other nodes. They report whether their frame  has focus,
+            // WebArea"s treat focus differently than other nodes. They report whether their frame  has focus,
             // not whether focus is specifically on the root node.
             if ("focused".equals(booleanProperty) && "RootWebArea".equals(this.role))
                 continue;
@@ -258,8 +281,19 @@ public class AXNode {
         for (String tristateProperty : tristateProperties) {
             if (!properties.containsKey(tristateProperty))
                 continue;
-            PropertyDescriptor propDesc = new PropertyDescriptor(tristateProperty, SerializedAXNode.class);
-            propDesc.getWriteMethod().invoke(node, properties.get(tristateProperty));
+            Object value = properties.get(tristateProperty);
+            if("mixed".equals( value)){
+                PropertyDescriptor propDesc = new PropertyDescriptor(tristateProperty, SerializedAXNode.class);
+                propDesc.getWriteMethod().invoke(node, value);
+            }else {
+                if("true".equals( value)){
+                    PropertyDescriptor propDesc = new PropertyDescriptor(tristateProperty, SerializedAXNode.class);
+                    propDesc.getWriteMethod().invoke(node, true);
+                }else {
+                    PropertyDescriptor propDesc = new PropertyDescriptor(tristateProperty, SerializedAXNode.class);
+                    propDesc.getWriteMethod().invoke(node, false);
+                }
+            }
         }
 
         for (String numericalProperty : numericalProperties) {
@@ -297,7 +331,9 @@ public class AXNode {
             }
 
         }
-        return nodeById.isEmpty() ? null : nodeById.get(payloads.get(0).getNodeId());
+        // Return the first node (root) or null if map is empty
+        Iterator<AXNode> iterator = nodeById.values().iterator();
+        return iterator.hasNext() ? iterator.next() : null;
     }
 
     public com.ruiyun.jvppeteer.cdp.entities.AXNode getPayload() {

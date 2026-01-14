@@ -8,20 +8,21 @@ import com.ruiyun.jvppeteer.bidi.entities.FetchTimingInfo;
 import com.ruiyun.jvppeteer.bidi.entities.Header;
 import com.ruiyun.jvppeteer.bidi.entities.ResponseData;
 import com.ruiyun.jvppeteer.bidi.entities.Value;
-import com.ruiyun.jvppeteer.common.Constant;
 import com.ruiyun.jvppeteer.cdp.entities.ContinueRequestOverrides;
 import com.ruiyun.jvppeteer.cdp.entities.Credentials;
 import com.ruiyun.jvppeteer.cdp.entities.ErrorReasons;
 import com.ruiyun.jvppeteer.cdp.entities.HeaderEntry;
 import com.ruiyun.jvppeteer.cdp.entities.Initiator;
+import com.ruiyun.jvppeteer.cdp.entities.InterceptResolutionAction;
+import com.ruiyun.jvppeteer.cdp.entities.InterceptResolutionState;
 import com.ruiyun.jvppeteer.cdp.entities.ResourceType;
 import com.ruiyun.jvppeteer.cdp.entities.ResponseForRequest;
+import com.ruiyun.jvppeteer.common.Constant;
 import com.ruiyun.jvppeteer.util.Base64Util;
 import com.ruiyun.jvppeteer.util.StringUtil;
 import com.ruiyun.jvppeteer.util.ValidateUtil;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -38,18 +39,18 @@ public class BidiRequest extends Request {
     private final RequestCore request;
     private volatile boolean authenticationHandled;
 
-    public BidiRequest(RequestCore request, BidiFrame frame, BidiRequest redirect) {
+    public BidiRequest(RequestCore request, BidiFrame frame, boolean isNetworkInterceptionEnabled, BidiRequest redirect) {
         super();
         requests.put(request, this);
-        this.interception.setEnabled(request.isBlocked());
+        this.interception.setEnabled(isNetworkInterceptionEnabled);
         this.request = request;
         this.frame = frame;
         this.redirectChain = Objects.nonNull(redirect) ? redirect.redirectChain() : new ArrayList<>();
         this.id = request.id();
     }
 
-    public static BidiRequest from(RequestCore bidiRequest, BidiFrame frame, BidiRequest redirect) {
-        BidiRequest request = new BidiRequest(bidiRequest, frame, redirect);
+    public static BidiRequest from(RequestCore bidiRequest, BidiFrame frame, boolean isNetworkInterceptionEnabled, BidiRequest redirect) {
+        BidiRequest request = new BidiRequest(bidiRequest, frame, isNetworkInterceptionEnabled, redirect);
         request.initialize();
         return request;
     }
@@ -62,7 +63,7 @@ public class BidiRequest extends Request {
 
     private void initialize() {
         this.request.on(RequestCore.RequestCoreEvents.redirect, (Consumer<RequestCore>) request -> {
-            BidiRequest httpRequest = BidiRequest.from(request, this.frame, this);
+            BidiRequest httpRequest = BidiRequest.from(request, this.frame, this.interception.getEnabled(), this);
             this.redirectChain.add(this);
             request.once(RequestCore.RequestCoreEvents.success, (ignored) -> {
                 this.frame.page().trustedEmitter().emit(PageEvents.RequestFinished, httpRequest);
@@ -73,21 +74,36 @@ public class BidiRequest extends Request {
             });
             httpRequest.finalizeInterceptions();
         });
+        this.request.once(RequestCore.RequestCoreEvents.response, (Consumer<ResponseData>) data -> {
+            // Create new response with the initial data. Note: the data can be updated later
+            // on, when the `success` event is received.
+            this.response = BidiResponse.from(data, this, this.frame.page().browser().cdpSupported());
+        });
 
         this.request.once(RequestCore.RequestCoreEvents.success, (Consumer<ResponseData>) data -> {
+            // The `network.responseCompleted` event (mapped to `success` here)
+            // contains the most up-to-date and complete response data, including
+            // headers that might be missing from `network.responseStarted`
             this.response = BidiResponse.from(data, this, this.frame.page().browser().cdpSupported());
         });
         this.request.on(RequestCore.RequestCoreEvents.authenticate, this.handleAuthentication());
 
         this.frame.page().trustedEmitter().emit(PageEvents.Request, this);
+    }
 
-        if (this.hasInternalHeaderOverwrite()) {
-            this.interception.getHandlers().add(() -> {
-                ContinueRequestOverrides continueRequestOverrides = new ContinueRequestOverrides();
-                continueRequestOverrides.setHeaders(this.headers());
-                this.continueRequest(continueRequestOverrides, 0);
-            });
+    @Override
+    protected boolean canBeIntercepted() {
+        return this.request.isBlocked();
+    }
+
+    @Override
+    public InterceptResolutionState interceptResolutionState() {
+        if (!this.request.isBlocked()) {
+            InterceptResolutionState state = new InterceptResolutionState();
+            state.setAction(InterceptResolutionAction.DISABLED);
+            return state;
         }
+        return super.interceptResolutionState();
     }
 
     @Override
@@ -101,6 +117,10 @@ public class BidiRequest extends Request {
             throw new UnsupportedOperationException();
         }
         return StringUtil.isEmpty(this.request.resourceType()) ? ResourceType.Other : ResourceType.valueOf(this.request.resourceType().toLowerCase());
+    }
+
+    public String getResponseContent() {
+        return this.request.getResponseContent();
     }
 
     @Override
@@ -118,51 +138,21 @@ public class BidiRequest extends Request {
 
     @Override
     public boolean hasPostData() {
-        if (!this.frame.page().browser().cdpSupported()) {
-            throw new UnsupportedOperationException();
-        }
         return this.request.hasPostData();
     }
 
     @Override
     public String fetchPostData() {
-        throw new UnsupportedOperationException();
-    }
-
-    private boolean hasInternalHeaderOverwrite() {
-        return !this.extraHTTPHeaders().isEmpty() || !this.userAgentHeaders().isEmpty();
-    }
-
-    private List<HeaderEntry> extraHTTPHeaders() {
-        if (Objects.nonNull(this.frame)) {
-            if (Objects.nonNull(this.frame.page().extraHTTPHeaders)) {
-                return this.frame.page().extraHTTPHeaders;
-            } else {
-                return Collections.emptyList();
-            }
-        }
-        return Collections.emptyList();
-    }
-
-    private List<HeaderEntry> userAgentHeaders() {
-        if (Objects.nonNull(this.frame)) {
-            if (Objects.nonNull(this.frame.page().userAgentHeaders)) {
-                return this.frame.page().userAgentHeaders;
-            } else {
-                return Collections.emptyList();
-            }
-        }
-        return Collections.emptyList();
+        return this.request.fetchPostData();
     }
 
     @Override
     public List<HeaderEntry> headers() {
+        // Callers should not be allowed to mutate internal structure.
         List<HeaderEntry> headers = new ArrayList<>();
         if (ValidateUtil.isNotEmpty(this.request.headers())) {
             headers.addAll(this.request.headers().stream().map(header -> new HeaderEntry(header.getName().toLowerCase(), header.getValue().getValue())).collect(Collectors.toList()));
         }
-        headers.addAll(this.userAgentHeaders());
-        headers.addAll(this.extraHTTPHeaders());
         return headers;
     }
 
@@ -194,17 +184,6 @@ public class BidiRequest extends Request {
     @Override
     public BidiFrame frame() {
         return this.frame;
-    }
-
-    @Override
-    public void continueRequest(ContinueRequestOverrides overrides, Integer priority) {
-        ContinueRequestOverrides newOverrides = new ContinueRequestOverrides();
-        if (this.hasInternalHeaderOverwrite()) {
-            newOverrides.setHeaders(this.headers());
-        } else {
-            newOverrides.setHeaders(null);
-        }
-        super.continueRequest(newOverrides, priority);
     }
 
     @Override

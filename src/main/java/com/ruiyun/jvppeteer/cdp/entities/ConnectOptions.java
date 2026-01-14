@@ -7,7 +7,7 @@ import com.ruiyun.jvppeteer.transport.ConnectionTransport;
 import java.util.Map;
 import java.util.function.Function;
 
-public class ConnectOptions  {
+public class ConnectOptions {
     /**
      * <br/>
      * Whether to ignore HTTPS errors during navigation.
@@ -16,9 +16,13 @@ public class ConnectOptions  {
      */
     private boolean acceptInsecureCerts = false;
     /**
+     * Is network events enabled?
+     */
+    private boolean networkEnabled = true;
+    /**
      * Sets a consistent viewport for each page.
      */
-    private Viewport defaultViewport ;
+    private Viewport defaultViewport;
     /**
      * <br/>
      * Slows down Puppeteer operations by the specified amount of milliseconds.
@@ -31,6 +35,11 @@ public class ConnectOptions  {
     private Function<Target, Boolean> targetFilter;
 
     private Function<Target, Boolean> isPageTarget;
+    /**
+     * Whether to handle the DevTools windows as pages in Puppeteer. Supported
+     * only in Chrome with CDP.
+     */
+    private boolean handleDevToolsAsPage;
     /**
      * 使用的通讯协议，CHROME 默认是 CDP，也仅支持 CDP
      * <p>
@@ -49,6 +58,7 @@ public class ConnectOptions  {
     private ConnectionTransport transport;
     private Map<String, String> headers;
     private SupportedWebDriverCapabilities capabilities;
+
     public String getBrowserWSEndpoint() {
         return browserWSEndpoint;
     }
@@ -143,5 +153,21 @@ public class ConnectOptions  {
 
     public void setProtocol(Protocol protocol) {
         this.protocol = protocol;
+    }
+
+    public boolean getNetworkEnabled() {
+        return networkEnabled;
+    }
+
+    public void setNetworkEnabled(boolean networkEnabled) {
+        this.networkEnabled = networkEnabled;
+    }
+
+    public boolean getHandleDevToolsAsPage() {
+        return handleDevToolsAsPage;
+    }
+
+    public void setHandleDevToolsAsPage(boolean handleDevToolsAsPage) {
+        this.handleDevToolsAsPage = handleDevToolsAsPage;
     }
 }

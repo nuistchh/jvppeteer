@@ -1,6 +1,7 @@
 package com.ruiyun.jvppeteer.cdp.core;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.ruiyun.jvppeteer.api.core.Browser;
 import com.ruiyun.jvppeteer.api.core.BrowserContext;
@@ -10,7 +11,6 @@ import com.ruiyun.jvppeteer.api.core.Target;
 import com.ruiyun.jvppeteer.api.events.BrowserContextEvents;
 import com.ruiyun.jvppeteer.api.events.BrowserEvents;
 import com.ruiyun.jvppeteer.api.events.ConnectionEvents;
-import com.ruiyun.jvppeteer.cdp.entities.BrowserContextOptions;
 import com.ruiyun.jvppeteer.cdp.entities.DebugInfo;
 import com.ruiyun.jvppeteer.cdp.entities.DownloadOptions;
 import com.ruiyun.jvppeteer.cdp.entities.DownloadPolicy;
@@ -18,9 +18,14 @@ import com.ruiyun.jvppeteer.cdp.entities.GetVersionResponse;
 import com.ruiyun.jvppeteer.cdp.entities.TargetInfo;
 import com.ruiyun.jvppeteer.cdp.entities.TargetType;
 import com.ruiyun.jvppeteer.cdp.entities.Viewport;
+import com.ruiyun.jvppeteer.common.AddScreenParams;
+import com.ruiyun.jvppeteer.common.BrowserContextOptions;
 import com.ruiyun.jvppeteer.common.Constant;
+import com.ruiyun.jvppeteer.common.CreatePageOptions;
+import com.ruiyun.jvppeteer.common.CreateType;
 import com.ruiyun.jvppeteer.common.ParamsFactory;
-import com.ruiyun.jvppeteer.common.Product;
+import com.ruiyun.jvppeteer.common.ScreenInfo;
+import com.ruiyun.jvppeteer.common.WindowBounds;
 import com.ruiyun.jvppeteer.exception.JvppeteerException;
 import com.ruiyun.jvppeteer.transport.SessionFactory;
 import com.ruiyun.jvppeteer.util.StringUtil;
@@ -57,10 +62,12 @@ public class CdpBrowser extends Browser {
     private final TargetManager targetManager;
     private String executablePath;
     private List<String> defaultArgs;
+    private final boolean networkEnabled;
+    private final boolean handleDevToolsAsPage;
 
-
-    protected CdpBrowser(Connection connection, List<String> contextIds, Viewport viewport, Process process, Runnable closeCallback, Function<Target, Boolean> targetFilterCallback, Function<Target, Boolean> isPageTargetCallback, boolean waitForInitiallyDiscoveredTargets) {
+    protected CdpBrowser(Connection connection, List<String> contextIds, Viewport viewport, Process process, Runnable closeCallback, Function<Target, Boolean> targetFilterCallback, Function<Target, Boolean> isPageTargetCallback, boolean waitForInitiallyDiscoveredTargets, boolean networkEnabled, boolean handleDevToolsAsPage) {
         super();
+        this.networkEnabled = networkEnabled;
         this.defaultViewport = viewport;
         this.process = process;
         this.connection = connection;
@@ -72,6 +79,7 @@ public class CdpBrowser extends Browser {
         if (targetFilterCallback == null) {
             targetFilterCallback = (ignore) -> true;
         }
+        this.handleDevToolsAsPage = handleDevToolsAsPage;
         this.setIsPageTargetCallback(isPageTargetCallback);
         this.targetManager = new TargetManager(connection, this.createTarget(), targetFilterCallback, waitForInitiallyDiscoveredTargets);
         this.defaultContext = new CdpBrowserContext(connection, this, "");
@@ -132,7 +140,7 @@ public class CdpBrowser extends Browser {
 
     private void setIsPageTargetCallback(Function<Target, Boolean> isPageTargetCallback) {
         if (isPageTargetCallback == null) {
-            isPageTargetCallback = (target -> TargetType.PAGE.equals(target.type()) || TargetType.BACKGROUND_PAGE.equals(target.type()) || TargetType.WEBVIEW.equals(target.type()));
+            isPageTargetCallback = (target -> TargetType.PAGE.equals(target.type()) || TargetType.BACKGROUND_PAGE.equals(target.type()) || TargetType.WEBVIEW.equals(target.type()) || (this.handleDevToolsAsPage && TargetType.OTHER.equals(target.type()) && isDevToolsPageTarget(target.url())));
         }
         this.isPageTargetCallback = isPageTargetCallback;
     }
@@ -188,7 +196,7 @@ public class CdpBrowser extends Browser {
             }
             SessionFactory createSession = (isAutoAttachEmulated) -> this.connection._createSession(targetInfo, isAutoAttachEmulated);
             OtherTarget otherTarget = new OtherTarget(targetInfo, session, context, this.targetManager, createSession);
-            if (StringUtil.isNotEmpty(targetInfo.getUrl()) && targetInfo.getUrl().startsWith("devtools://")) {
+            if (StringUtil.isNotEmpty(targetInfo.getUrl()) && isDevToolsPageTarget(targetInfo.getUrl())) {
                 return new DevToolsTarget(targetInfo, session, context, this.targetManager, createSession, this.defaultViewport);
             }
             if (this.isPageTargetCallback.apply(otherTarget)) {
@@ -227,15 +235,47 @@ public class CdpBrowser extends Browser {
         return this.connection.url();
     }
 
-    public Page newPage() {
-        return this.defaultContext.newPage();
+    @Override
+    public WindowBounds getWindowBounds(int windowId) {
+        Map<String, Object> params = ParamsFactory.create();
+        params.put("windowId", windowId);
+        JsonNode response = this.connection.send("Browser.getWindowBounds", params).get("bounds");
+        return Constant.OBJECTMAPPER.convertValue(response, WindowBounds.class);
     }
 
-    Page createPageInContext(String contextId) {
+    @Override
+    public void setWindowBounds(int windowId, WindowBounds windowBounds) {
+        Map<String, Object> params = ParamsFactory.create();
+        params.put("windowId", windowId);
+        params.put("bounds", windowBounds);
+        this.connection.send("Browser.setWindowBounds", params);
+    }
+
+    public Page newPage(CreatePageOptions options) {
+        return this.defaultContext.newPage(options);
+    }
+
+    Page createPageInContext(String contextId, CreatePageOptions options) {
+        boolean hasTargets = this.targets().stream()
+                .anyMatch(t -> t.browserContext().id().equals(contextId));
+        WindowBounds windowBounds =
+                (options != null && CreateType.Window.equals(options.getType())) ?
+                        options.getWindowBounds() :
+                        null;
         Map<String, Object> params = ParamsFactory.create();
         params.put("url", "about:blank");
         if (StringUtil.isNotEmpty(contextId)) {
             params.put("browserContextId", contextId);
+        }
+        if (Objects.nonNull(windowBounds)) {
+            params.put("left", windowBounds.getLeft());
+            params.put("top", windowBounds.getTop());
+            params.put("width", windowBounds.getWidth());
+            params.put("height", windowBounds.getHeight());
+            params.put("windowState", windowBounds.getWindowState());
+        }
+        if (hasTargets && Objects.nonNull(options) && Objects.equals(options.getType(), CreateType.Window)) {
+            params.put("newWindow", true);
         }
         JsonNode result = this.connection.send("Target.createTarget", params);
         if (result != null) {
@@ -267,7 +307,7 @@ public class CdpBrowser extends Browser {
     }
 
     public List<CdpTarget> targets() {
-        return this.targetManager.getAvailableTargets().values().stream().filter(target -> target.isTargetExposed() && Objects.equals(target.initializedResult.waitingGetResult(),CdpTarget.InitializationStatus.SUCCESS)).collect(Collectors.toList());
+        return this.targetManager.getAvailableTargets().values().stream().filter(target -> target.isTargetExposed() && Objects.equals(target.initializedResult.waitingGetResult(), CdpTarget.InitializationStatus.SUCCESS)).collect(Collectors.toList());
     }
 
     public String version() throws JsonProcessingException {
@@ -280,18 +320,26 @@ public class CdpBrowser extends Browser {
         return version.getUserAgent();
     }
 
+    public volatile boolean closed;
+
     @Override
     public void close() {
-        this.autoClose = true;
+        if (this.closed) {
+            return;
+        }
         this.closeCallback.run();
         this.disconnect();
+        this.closed = true;
     }
 
     public void disconnect() {
-        this.autoClose = true;
+        if (this.closed) {
+            return;
+        }
         this.targetManager.dispose();
         this.connection.dispose();
         this.detach();
+        this.closed = true;
     }
 
     public boolean connected() {
@@ -304,8 +352,8 @@ public class CdpBrowser extends Browser {
     }
 
 
-    public static CdpBrowser create(Connection connection, List<String> contextIds, boolean acceptInsecureCerts, Viewport defaultViewport, Process process, Runnable closeCallback, Function<Target, Boolean> targetFilterCallback, Function<Target, Boolean> IsPageTargetCallback, boolean waitForInitiallyDiscoveredTargets) {
-        CdpBrowser cdpBrowser = new CdpBrowser(connection, contextIds, defaultViewport, process, closeCallback, targetFilterCallback, IsPageTargetCallback, waitForInitiallyDiscoveredTargets);
+    public static CdpBrowser create(Connection connection, List<String> contextIds, boolean acceptInsecureCerts, Viewport defaultViewport, Process process, Runnable closeCallback, Function<Target, Boolean> targetFilterCallback, Function<Target, Boolean> IsPageTargetCallback, boolean waitForInitiallyDiscoveredTargets, boolean networkEnabled, boolean handleDevToolsAsPage) {
+        CdpBrowser cdpBrowser = new CdpBrowser(connection, contextIds, defaultViewport, process, closeCallback, targetFilterCallback, IsPageTargetCallback, waitForInitiallyDiscoveredTargets, networkEnabled, handleDevToolsAsPage);
         if (acceptInsecureCerts) {
             Map<String, Object> params = ParamsFactory.create();
             params.put("ignore", true);
@@ -368,44 +416,63 @@ public class CdpBrowser extends Browser {
         this.connection.send("Browser.cancelDownload", params);
     }
 
-
-    public enum BrowserEvent {
-        /**
-         * 创建target
-         * {@link Target}
-         */
-        TargetCreated,
-        /**
-         * 销毁target
-         * {@link Target}
-         */
-        TargetDestroyed,
-        /**
-         * target变化
-         * {@link Target}
-         */
-        TargetChanged,
-        /**
-         * 发现target
-         * {@link TargetInfo}
-         */
-        TargetDiscovered,
-        /**
-         * 断开连接
-         * Object
-         */
-        Disconnected,
-        /**
-         * 下载进度时触发
-         */
-        DownloadProgress,
-
-        /**
-         * 当页面准备开始下载时促发
-         */
-        DownloadWillBegin
-
-
+    @Override
+    public boolean isNetworkEnabled() {
+        return this.networkEnabled;
     }
 
+    @Override
+    public String installExtension(String path) {
+        Map<String, Object> params = ParamsFactory.create();
+        params.put("path", path);
+        return this.connection.send("Extensions.loadUnpacked", params).asText();
+    }
+
+    @Override
+    public void uninstallExtension(String id) {
+        Map<String, Object> params = ParamsFactory.create();
+        params.put("id", id);
+        this.connection.send("Extensions.uninstall", params);
+    }
+
+    @Override
+    public List<ScreenInfo> screens() throws JsonProcessingException {
+        return Constant.OBJECTMAPPER.treeToValue(this.connection.send("Emulation.getScreenInfos").get("screenInfos"), new TypeReference<ArrayList<ScreenInfo>>() {
+        });
+    }
+
+    @Override
+    public ScreenInfo addScreen(AddScreenParams params) throws JsonProcessingException {
+        return Constant.OBJECTMAPPER.treeToValue(this.connection.send("Emulation.addScreen", params).get("screenInfo"), ScreenInfo.class);
+    }
+
+    @Override
+    public void removeScreen(String screenId) {
+        Map<String, Object> params = ParamsFactory.create();
+        params.put("screenId", screenId);
+        this.connection.send("Emulation.removeScreen", params);
+    }
+
+    public Page createDevToolsPage(String pageTargetId) {
+        Map<String, Object> params = ParamsFactory.create();
+        params.put("targetId", pageTargetId);
+        JsonNode openDevToolsResponse = this.connection.send("Target.openDevTools", params);
+        CdpTarget target = (CdpTarget) this.waitForTarget(t -> ((CdpTarget) t).getTargetId().equals(openDevToolsResponse.get("targetId").asText()));
+        if (Objects.isNull(target)) {
+            throw new JvppeteerException("Missing target for DevTools page (id = " + pageTargetId + ")");
+        }
+        boolean initialized = target.initializedResult.waitingGetResult().equals(CdpTarget.InitializationStatus.SUCCESS);
+        if (!initialized) {
+            throw new JvppeteerException("Failed to create target for DevTools page (id = " + pageTargetId + ")");
+        }
+        Page page = target.page();
+        if (Objects.isNull(page)) {
+            throw new JvppeteerException("Failed to create a DevTools Page for target (id = " + pageTargetId + ")");
+        }
+        return page;
+    }
+
+    public static boolean isDevToolsPageTarget(String url) {
+        return url.startsWith("devtools://devtools/bundled/devtools_app.html");
+    }
 }

@@ -5,10 +5,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.ruiyun.jvppeteer.api.core.EventEmitter;
 import com.ruiyun.jvppeteer.api.events.ConnectionEvents;
 import com.ruiyun.jvppeteer.bidi.entities.AddPreloadScriptOptions;
-import com.ruiyun.jvppeteer.bidi.entities.ClosedEvent;
+import com.ruiyun.jvppeteer.common.ProxyConfiguration;
 import com.ruiyun.jvppeteer.bidi.entities.RealmInfo;
 import com.ruiyun.jvppeteer.bidi.entities.RealmType;
+import com.ruiyun.jvppeteer.bidi.events.ClosedEvent;
 import com.ruiyun.jvppeteer.bidi.events.ContextCreatedEvent;
+import com.ruiyun.jvppeteer.common.BrowserContextOptions;
 import com.ruiyun.jvppeteer.common.Constant;
 import com.ruiyun.jvppeteer.common.DisposableStack;
 import com.ruiyun.jvppeteer.common.ParamsFactory;
@@ -167,7 +169,7 @@ public class BrowserCore extends EventEmitter<BrowserCore.BrowserCoreEvent> {
     }
 
     public void close() {
-        ValidateUtil.assertArg(Objects.isNull(this.reason), "Browser already disposed");
+        throwIfDisposed("Browser already disposed");
         try {
             this.session.send("browser.close", new HashMap<>());
         } finally {
@@ -180,7 +182,7 @@ public class BrowserCore extends EventEmitter<BrowserCore.BrowserCoreEvent> {
         params.put("functionDeclaration", functionDeclaration);
         params.put("arguments", options.getArguments());
         params.put("sandbox", options.getSandbox());
-        if(ValidateUtil.isNotEmpty(options.getContexts())){
+        if (ValidateUtil.isNotEmpty(options.getContexts())) {
             params.put("contexts", (options.getContexts()));
         }
         JsonNode res = this.session().send("script.addPreloadScript", params);
@@ -188,7 +190,7 @@ public class BrowserCore extends EventEmitter<BrowserCore.BrowserCoreEvent> {
     }
 
     public void removeIntercept(String intercept) {
-        ValidateUtil.assertArg(Objects.isNull(this.reason), "Browser has been disposed");
+        throwIfDisposed("Browser has been disposed");
         this.session.send("script.removeIntercept", new HashMap<String, Object>() {
             {
                 put("intercept", intercept);
@@ -197,7 +199,7 @@ public class BrowserCore extends EventEmitter<BrowserCore.BrowserCoreEvent> {
     }
 
     public void removePreloadScript(String script) {
-        ValidateUtil.assertArg(Objects.isNull(this.reason), "Browser has been disposed");
+        throwIfDisposed("Browser has been disposed");
         this.session.send("script.removePreloadScript", new HashMap<String, Object>() {
             {
                 put("script", script);
@@ -205,14 +207,44 @@ public class BrowserCore extends EventEmitter<BrowserCore.BrowserCoreEvent> {
         });
     }
 
-    public UserContext createUserContext() {
-        ValidateUtil.assertArg(Objects.isNull(this.reason), "Browser has been disposed");
-        JsonNode res = this.session.send("browser.createUserContext", Collections.EMPTY_MAP);
+    public UserContext createUserContext(BrowserContextOptions options) {
+        throwIfDisposed("Browser has been disposed");
+        ProxyConfiguration proxyConfig = null;
+        if(Objects.nonNull(options.getProxyServer())){
+            proxyConfig = new ProxyConfiguration();
+            proxyConfig.setProxyType("manual");
+            proxyConfig.setHttpProxy(options.getProxyServer());
+            proxyConfig.setSslProxy(options.getProxyServer());
+            proxyConfig.setNoProxy(options.getProxyBypassList());
+        }
+        Map<String, Object> params = ParamsFactory.create();
+        params.put("proxy", proxyConfig);
+        JsonNode res = this.session.send("browser.createUserContext", params);
         return this.createUserContext(res.at("/result/userContext"));
     }
 
     Session session() {
         return this.session;
+    }
+
+    public String installExtension(String path) {
+        throwIfDisposed("Browser has been disposed");
+        Map<String, Object> params = ParamsFactory.create();
+        Map<String, Object> pathObj = ParamsFactory.create();
+        pathObj.put("path", path);
+        pathObj.put("type", "path");
+        params.put("extensionData", pathObj);
+        return this.session.send("webExtension.install", params).at("/result/extension").asText();
+    }
+
+    private void throwIfDisposed(String message) {
+        ValidateUtil.assertArg(Objects.isNull(this.reason), message);
+    }
+
+    public void uninstallExtension(String id) {
+        Map<String, Object> params = ParamsFactory.create();
+        params.put("extension", id);
+        this.session.send("webExtension.uninstall", params);
     }
 
     public enum BrowserCoreEvent {

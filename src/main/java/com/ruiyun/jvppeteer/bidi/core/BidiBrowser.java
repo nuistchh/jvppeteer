@@ -13,17 +13,21 @@ import com.ruiyun.jvppeteer.api.events.TrustedEmitter;
 import com.ruiyun.jvppeteer.bidi.entities.SupportedWebDriverCapabilities;
 import com.ruiyun.jvppeteer.bidi.entities.UserPromptHandler;
 import com.ruiyun.jvppeteer.bidi.entities.UserPromptHandlerType;
-import com.ruiyun.jvppeteer.common.Constant;
-import com.ruiyun.jvppeteer.common.ParamsFactory;
-import com.ruiyun.jvppeteer.cdp.entities.BrowserContextOptions;
+import com.ruiyun.jvppeteer.common.BrowserContextOptions;
 import com.ruiyun.jvppeteer.cdp.entities.DebugInfo;
 import com.ruiyun.jvppeteer.cdp.entities.DownloadOptions;
-import com.ruiyun.jvppeteer.cdp.entities.DownloadPolicy;
 import com.ruiyun.jvppeteer.cdp.entities.Viewport;
-import com.ruiyun.jvppeteer.exception.JvppeteerException;
+import com.ruiyun.jvppeteer.common.AddScreenParams;
+import com.ruiyun.jvppeteer.common.Constant;
+import com.ruiyun.jvppeteer.common.CreatePageOptions;
+import com.ruiyun.jvppeteer.common.ParamsFactory;
+import com.ruiyun.jvppeteer.common.ScreenInfo;
+import com.ruiyun.jvppeteer.common.WindowBounds;
+import com.ruiyun.jvppeteer.exception.ProtocolException;
 import com.ruiyun.jvppeteer.transport.CdpConnection;
 import com.ruiyun.jvppeteer.util.StringUtil;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -46,12 +50,14 @@ public class BidiBrowser extends Browser {
     private final Map<UserContext, BidiBrowserContext> browserContexts = new WeakHashMap<>();
     private final TrustedEmitter<BrowserEvents> trustedEmitter = new TrustedEmitter<>();
     private final BidiBrowserTarget target = new BidiBrowserTarget(this);
+    private final boolean networkEnabled;
 
     static {
         subscribeModules.add("browsingContext");
         subscribeModules.add("network");
         subscribeModules.add("log");
         subscribeModules.add("script");
+        subscribeModules.add("input");
         subscribeCdpEvents.add("goog:cdp.Debugger.scriptParsed");
         subscribeCdpEvents.add("goog:cdp.CSS.styleSheetAdded");
         subscribeCdpEvents.add("goog:cdp.Runtime.executionContextsCleared");
@@ -61,7 +67,7 @@ public class BidiBrowser extends Browser {
         subscribeCdpEvents.add("goog:cdp.Page.screencastFrame");
     }
 
-    public static BidiBrowser create(Process process, Runnable closeCallback, BidiConnection connection, CdpConnection cdpConnection, Viewport defaultViewport, boolean acceptInsecureCerts, SupportedWebDriverCapabilities capabilities) throws JsonProcessingException {
+    public static BidiBrowser create(Process process, Runnable closeCallback, BidiConnection connection, CdpConnection cdpConnection, Viewport defaultViewport, boolean acceptInsecureCerts, SupportedWebDriverCapabilities capabilities, boolean networkEnabled) throws JsonProcessingException {
         ObjectNode capabilitiesNode = Constant.OBJECTMAPPER.createObjectNode();
         if (Objects.nonNull(capabilities)) {
             capabilitiesNode.putPOJO("firstMatch", capabilities.getFirstMatch());
@@ -85,19 +91,51 @@ public class BidiBrowser extends Browser {
         if (!isFirefox) {
             subscribes.addAll(subscribeCdpEvents);
         }
+        subscribes = subscribes.stream().filter(module -> {
+            if (!networkEnabled) {
+                return !Objects.equals(module, "network") &&
+                        !Objects.equals(module, "goog:cdp.Network.requestWillBeSent");
+            }
+            return true;
+        }).collect(Collectors.toList());
         session.subscribe(subscribes, null);
-        BidiBrowser browser = new BidiBrowser(session.browser, process, closeCallback, cdpConnection, defaultViewport);
+        try {
+            Map<String, Object> params = ParamsFactory.create();
+            params.put("dataTypes", Collections.singletonList("request"));
+            params.put("maxEncodedDataSize", 20_000_000);// 20 MB
+            session.send("network.addDataCollector", params);
+        } catch (Exception e) {
+            if (e instanceof ProtocolException) {
+                LOGGER.error("jvppeteer:error {}", e.getMessage(), e);
+            } else {
+                throw e;
+            }
+        }
+        try {
+            Map<String, Object> params = ParamsFactory.create();
+            params.put("dataTypes", Collections.singletonList("response"));
+            params.put("maxEncodedDataSize", 20_000_000);// 20 MB
+            session.send("network.addDataCollector", params);
+        } catch (Exception e) {
+            if (e instanceof ProtocolException) {
+                LOGGER.error("jvppeteer:error {}", e.getMessage(), e);
+            } else {
+                throw e;
+            }
+        }
+        BidiBrowser browser = new BidiBrowser(session.browser, process, closeCallback, cdpConnection, defaultViewport, networkEnabled);
         browser.initialize();
         return browser;
     }
 
-    private BidiBrowser(BrowserCore browserCore, Process process, Runnable closeCallback, CdpConnection cdpConnection, Viewport defaultViewport) {
+    private BidiBrowser(BrowserCore browserCore, Process process, Runnable closeCallback, CdpConnection cdpConnection, Viewport defaultViewport, boolean networkEnabled) {
         super();
         this.process = process;
         this.closeCallback = closeCallback;
         this.browserCore = browserCore;
         this.defaultViewport = defaultViewport;
         this.cdpConnection = cdpConnection;
+        this.networkEnabled = networkEnabled;
         this.trustedEmitter.pipeTo(this);
     }
 
@@ -105,7 +143,7 @@ public class BidiBrowser extends Browser {
         for (UserContext userContext : this.browserCore.userContexts()) {
             this.createBrowserContext(userContext);
         }
-        this.browserCore.once(BrowserCore.BrowserCoreEvent.disconnected, ignored ->{
+        this.browserCore.once(BrowserCore.BrowserCoreEvent.disconnected, ignored -> {
             this.trustedEmitter.emit(BrowserEvents.Disconnected, true);
             this.trustedEmitter.removeAllListeners(null);
         });
@@ -154,7 +192,7 @@ public class BidiBrowser extends Browser {
 
     @Override
     public BrowserContext createBrowserContext(BrowserContextOptions options) {
-        UserContext userContext = this.browserCore.createUserContext();
+        UserContext userContext = this.browserCore.createUserContext(options);
         return this.createBrowserContext(userContext);
     }
 
@@ -174,7 +212,17 @@ public class BidiBrowser extends Browser {
     }
 
     @Override
-    public Page newPage() {
+    public WindowBounds getWindowBounds(int windowId) {
+       throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void setWindowBounds(int windowId, WindowBounds windowBounds) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Page newPage(CreatePageOptions options) {
         return this.defaultBrowserContext().newPage();
     }
 
@@ -194,7 +242,7 @@ public class BidiBrowser extends Browser {
 
     @Override
     public String version() throws JsonProcessingException {
-        return this.browserName() +"/"+ this.browserVersion();
+        return this.browserName() + "/" + this.browserVersion();
     }
 
     private String browserName() {
@@ -239,34 +287,74 @@ public class BidiBrowser extends Browser {
      */
     @Override
     public void setDownloadBehavior(DownloadOptions options) {
-        if (Objects.isNull(options.getBehavior())) {
-            options.setBehavior(DownloadPolicy.Default);
+        if (Objects.equals(options.getBehavior().getBehavior(), "allowAndName")) {
+            throw new UnsupportedOperationException("`allowAndName` is not supported in WebDriver BiDi");
         }
-        if (options.getBehavior().equals(DownloadPolicy.Allow) || options.getBehavior().equals(DownloadPolicy.AllowAndName)) {
-            if (StringUtil.isBlank(options.getDownloadPath())) {
-                throw new JvppeteerException("This is required if behavior is set to 'allow' or 'allowAndName'.");
+        if (Objects.equals(options.getBehavior().getBehavior(), "allow")) {
+            if (StringUtil.isEmpty(options.getDownloadPath())) {
+                throw new UnsupportedOperationException("`downloadPath` is required in `allow` download behavior");
             }
+            Map<String, Object> params = ParamsFactory.create();
+            ObjectNode downloadBehavior = Constant.OBJECTMAPPER.createObjectNode();
+            downloadBehavior.put("type", "allowed");
+            downloadBehavior.put("destinationFolder", options.getDownloadPath());
+            params.put("downloadBehavior", downloadBehavior);
+            params.put("userContexts", Collections.singletonList(options.getBrowserContextId()));
+            this.browserCore.session().send("browser.setDownloadBehavior", params);
+
         }
-        Map<String, Object> params = ParamsFactory.create();
-        params.put("behavior", options.getBehavior().getBehavior());
-        params.put("downloadPath", options.getDownloadPath());
-        params.put("browserContextId", options.getBrowserContextId());
-        params.put("eventsEnabled", options.getEventsEnabled());
-        this.browserCore.session().send("Browser.setDownloadBehavior", params);
+        if (Objects.equals(options.getBehavior().getBehavior(), "deny")) {
+            Map<String, Object> params = ParamsFactory.create();
+            ObjectNode downloadBehavior = Constant.OBJECTMAPPER.createObjectNode();
+            downloadBehavior.put("type", "denied");
+            params.put("downloadBehavior", downloadBehavior);
+            params.put("userContexts", Collections.singletonList(options.getBrowserContextId()));
+            this.browserCore.session().send("browser.setDownloadBehavior", params);
+        }
     }
 
-    /**
-     * 设置下载行为
-     *
-     * @param guid             下载的全局唯一标识符。
-     * @param browserContextId BrowserContext 在其中执行操作。省略时，将使用默认浏览器上下文。
-     */
+/**
+ * 设置下载行为
+ *
+ * @param guid             下载的全局唯一标识符。
+ * @param browserContextId BrowserContext 在其中执行操作。省略时，将使用默认浏览器上下文。
+ */
+@Override
+public void cancelDownload(String guid, String browserContextId) {
+    Map<String, Object> params = ParamsFactory.create();
+    params.put("guid", guid);
+    params.put("browserContextId", browserContextId);
+    this.browserCore.session().send("Browser.cancelDownload", params);
+}
+
+@Override
+public boolean isNetworkEnabled() {
+    return this.networkEnabled;
+}
+
     @Override
-    public void cancelDownload(String guid, String browserContextId) {
-        Map<String, Object> params = ParamsFactory.create();
-        params.put("guid", guid);
-        params.put("browserContextId", browserContextId);
-        this.browserCore.session().send("Browser.cancelDownload", params);
+    public String installExtension(String path) {
+        return this.browserCore.installExtension(path);
     }
+
+    @Override
+    public void uninstallExtension(String id) {
+        this.browserCore.uninstallExtension(id);
+    }
+
+    @Override
+public List<ScreenInfo> screens() {
+    throw new UnsupportedOperationException();
+}
+
+@Override
+public ScreenInfo addScreen(AddScreenParams params) {
+    throw new UnsupportedOperationException();
+}
+
+@Override
+public void removeScreen(String screenId) {
+    throw new UnsupportedOperationException();
+}
 
 }

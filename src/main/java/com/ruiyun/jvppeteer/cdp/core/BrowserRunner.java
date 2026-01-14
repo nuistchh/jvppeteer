@@ -3,17 +3,24 @@ package com.ruiyun.jvppeteer.cdp.core;
 import com.ruiyun.jvppeteer.api.core.Connection;
 import com.ruiyun.jvppeteer.cdp.entities.Protocol;
 import com.ruiyun.jvppeteer.common.Constant;
+import com.ruiyun.jvppeteer.common.ParamsFactory;
 import com.ruiyun.jvppeteer.common.Product;
 import com.ruiyun.jvppeteer.exception.JvppeteerException;
+import com.ruiyun.jvppeteer.util.Base64Util;
+import com.ruiyun.jvppeteer.util.FileUtil;
 import com.ruiyun.jvppeteer.util.Helper;
+import com.ruiyun.jvppeteer.util.NodeDownloader;
 import com.ruiyun.jvppeteer.util.StringUtil;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
@@ -21,6 +28,7 @@ import org.slf4j.LoggerFactory;
 
 
 import static com.ruiyun.jvppeteer.common.Constant.BACKUP_SUFFIX;
+import static com.ruiyun.jvppeteer.common.Constant.JVPPETEER_PIPE_LAUNCH_RESOURCE_DIR;
 import static com.ruiyun.jvppeteer.common.Constant.PREFS_JS;
 import static com.ruiyun.jvppeteer.common.Constant.USER_JS;
 import static com.ruiyun.jvppeteer.util.FileUtil.removeFolder;
@@ -30,25 +38,27 @@ public class BrowserRunner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BrowserRunner.class);
     private final String executablePath;
-    private final List<String> processArguments;
+    private final List<String> browserArgs;
     private final String tempDirectory;
     private Protocol protocol;
     private final Product product;
     private Process process;
     private Connection connection;
     private volatile boolean closed;
-    private static final List<BrowserRunner> runners = new ArrayList<>();
+    private static final List<BrowserRunner> runners = Collections.synchronizedList(new ArrayList<>());
     private static boolean isRegisterShutdownHook = false;
     private final String customizedUserDataDir;
+    private final Map<String, String> env;
+    private final boolean usepipe;
     /**
      * 浏览器进程id
      */
     private String pid;
 
-    public BrowserRunner(String executablePath, List<String> processArguments, String tempDirectory, Product product, Protocol protocol, String customizedUserDataDir) {
+    public BrowserRunner(String executablePath, List<String> browserArgs, String tempDirectory, Product product, Protocol protocol, String customizedUserDataDir, Map<String, String> env, boolean usePipe) {
         super();
         this.executablePath = executablePath;
-        this.processArguments = processArguments;
+        this.browserArgs = browserArgs;
         this.tempDirectory = tempDirectory;
         this.product = product;
         this.protocol = protocol;
@@ -59,6 +69,8 @@ public class BrowserRunner {
             }
         }
         this.closed = true;
+        this.env = env;
+        this.usepipe = usePipe;
     }
 
     /**
@@ -72,13 +84,84 @@ public class BrowserRunner {
             throw new JvppeteerException("This process has previously been started.");
         }
         List<String> arguments = new ArrayList<>();
-        arguments.add(this.executablePath);
-        arguments.addAll(this.processArguments);
-        ProcessBuilder processBuilder = new ProcessBuilder(arguments).redirectErrorStream(true);
+        if (usepipe) {
+            String pipeDir = System.getProperty(JVPPETEER_PIPE_LAUNCH_RESOURCE_DIR);
+            if (StringUtil.isEmpty(pipeDir)) {
+                pipeDir = Helper.join(System.getProperty("user.dir"), ".pipe-resources-"+Constant.JVPPETEER_VERSION);
+            }
+            //添加node path
+            arguments.add(getNodeExecutablePath(pipeDir));
+            //添加launch-browser-pipe.js
+            arguments.add(getPipeLaunchJsPath(pipeDir).toString());
+            Map<String, Object> params = ParamsFactory.create();
+            params.put("executablePath", this.executablePath);
+            params.put("args", this.browserArgs);
+            arguments.add(Base64Util.encode(Constant.OBJECTMAPPER.writeValueAsString(params).getBytes(StandardCharsets.UTF_8)));
+        } else {
+            arguments.add(this.executablePath);
+            arguments.addAll(this.browserArgs);
+        }
+        ProcessBuilder processBuilder = new ProcessBuilder(arguments);
+        if (usepipe) {
+            processBuilder.redirectError(ProcessBuilder.Redirect.INHERIT);
+        } else {
+            processBuilder.redirectErrorStream(true);
+        }
+        if (Objects.nonNull(env)) processBuilder.environment().putAll(env);
         this.process = processBuilder.start();
         this.closed = false;
         registerHook();
     }
+
+    private static Path getPipeLaunchJsPath(String pipeDir) throws IOException {
+        Path pipePath = Paths.get(pipeDir);
+        Path pipeLaunchJsPath;
+        if (!Files.exists(pipePath) || !Files.isDirectory(pipePath)) {
+            FileUtil.createDirs(pipePath);
+            pipeLaunchJsPath = BrowserFetcher.copyResourceFileToDirectory("launch-browser-pipe.js", pipeDir, "/scripts/");
+        } else {
+            Path isExistJsPath = pipePath.resolve("launch-browser-pipe.js");
+            boolean isJsFileExist = Files.exists(isExistJsPath);
+            if (isJsFileExist) {
+                pipeLaunchJsPath = isExistJsPath;
+            } else {
+                pipeLaunchJsPath = BrowserFetcher.copyResourceFileToDirectory("launch-browser-pipe.js", pipeDir, "/scripts/");
+            }
+        }
+        return pipeLaunchJsPath;
+    }
+
+    /**
+     * 如果本地没有找到，检查并下载 Node.js
+     */
+    public static String getNodeExecutablePath(String pipeDir) throws IOException {
+        Path pipePath = Paths.get(pipeDir);
+        Path nodeExecutable;
+        if (!Files.exists(pipePath) || !Files.isDirectory(pipePath)) {
+            FileUtil.createDirs(pipePath);
+            // 如果系统未安装，则下载 Node.js
+            Path nodeDir = NodeDownloader.downloadNode(pipeDir);
+            nodeExecutable = NodeDownloader.getNodeExecutablePath(nodeDir);
+        } else {
+            Path existNodePath = NodeDownloader.getNodeExecutablePath(pipePath.resolve(NodeDownloader.archive()));
+            boolean isNodeExist = Files.exists(existNodePath);
+            if (isNodeExist && Files.isExecutable(existNodePath)) {
+                nodeExecutable = existNodePath;
+            } else {
+                // 如果系统未安装，则下载 Node.js
+                Path nodeDir = NodeDownloader.downloadNode(pipeDir);
+                nodeExecutable = NodeDownloader.getNodeExecutablePath(nodeDir);
+                if (!Files.isExecutable(nodeExecutable)) {
+                    throw new IOException("Node.js is not executable,path : " + nodeExecutable);
+                }
+            }
+        }
+        if (!Files.exists(nodeExecutable)) {
+            throw new IOException("Node.js executable not found at: " + nodeExecutable);
+        }
+        return nodeExecutable.toString();
+    }
+
 
     /**
      * 注册钩子函数，程序关闭时，关闭浏览器
@@ -112,16 +195,16 @@ public class BrowserRunner {
             }
             Process exec;
             String command;
-            if (Helper.isLinux() || Helper.isMac()) {
+            if (Helper.isUnixLike()) {
                 command = "kill -9 " + pid;
                 exec = Runtime.getRuntime().exec(new String[]{"/bin/sh", "-c", command});
             } else {
-                    command = "cmd.exe /c taskkill /pid " + pid + " /F /T ";
-                    exec = Runtime.getRuntime().exec(command);
+                command = "cmd.exe /c taskkill /pid " + pid + " /F /T ";
+                exec = Runtime.getRuntime().exec(command);
             }
             try {
                 if (Objects.nonNull(exec)) {
-                    if(LOGGER.isDebugEnabled()){
+                    if (LOGGER.isDebugEnabled()) {
                         LOGGER.debug("kill chrome process by pid,command:  {}", command);
                     }
                     exec.waitFor(Constant.DEFAULT_TIMEOUT, TimeUnit.MILLISECONDS);
@@ -148,7 +231,11 @@ public class BrowserRunner {
         }
         process.destroy();
         try {
-            process.waitFor(30L, TimeUnit.SECONDS);
+            boolean finish = process.waitFor(30L, TimeUnit.SECONDS);
+            if (!finish) {
+                process.destroyForcibly();
+                process.waitFor(2, TimeUnit.SECONDS);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             LOGGER.error("operation interrupt", e);
@@ -201,7 +288,7 @@ public class BrowserRunner {
             } catch (Exception ignored) {
             }
         } else {
-            if (Objects.equals(this.product, Product.Firefox) && Objects.equals(this.protocol,Protocol.WebDriverBiDi)) {
+            if (Objects.equals(this.product, Product.Firefox) && Objects.equals(this.protocol, Protocol.WebDriverBiDi)) {
                 //回复备份文件的名字
                 String prefsPath = Helper.join(this.customizedUserDataDir, PREFS_JS);
                 String userPath = Helper.join(this.customizedUserDataDir, USER_JS);
@@ -249,13 +336,8 @@ public class BrowserRunner {
 
     }
 
-
     public boolean isClosed() {
         return this.closed;
-    }
-
-    public String getTempDirectory() {
-        return tempDirectory;
     }
 
     public void setConnection(Connection connection) {

@@ -83,7 +83,7 @@ public class FirefoxLauncher extends com.ruiyun.jvppeteer.launch.BrowserLauncher
             LOGGER.debug("Calling {} {}", this.executablePath, String.join(" ", firefoxArguments));
         }
         Browser browser = createBrowser(options, firefoxArguments, temporaryUserDataDir, usePipe, defaultArgs, customizedUserDataDir);
-        LOGGER.info("Successfully launch the browser, the executablePath is {}, the protocol is {}", this.executablePath, options.getProtocol());
+        LOGGER.info("Browser started successfully, executablePath is {}, protocol is {},version is {}", this.executablePath, options.getProtocol(),browser.version());
         return browser;
     }
 
@@ -139,7 +139,7 @@ public class FirefoxLauncher extends com.ruiyun.jvppeteer.launch.BrowserLauncher
 
         defaultPrefs.put("apz.content_response_timeout", 60000);
 
-        defaultPrefs.put("browser.contentblocking.features.standard", "-tp,tpPrivate,cookieBehavior0,-cm,-fp");
+        defaultPrefs.put("browser.contentblocking.features.standard", "-tp,tpPrivate,cookieBehavior0,-cryptoTP,-fp");
         defaultPrefs.put("browser.dom.window.dump.enabled", true);
         defaultPrefs.put("browser.newtabpage.activity-stream.feeds.system.topstories", false);
         defaultPrefs.put("browser.newtabpage.enabled", false);
@@ -195,8 +195,6 @@ public class FirefoxLauncher extends com.ruiyun.jvppeteer.launch.BrowserLauncher
         defaultPrefs.put("extensions.getAddons.cache.enabled", false);
 
         defaultPrefs.put("extensions.installDistroAddons", false);
-
-        defaultPrefs.put("extensions.screenshots.disabled", true);
 
         defaultPrefs.put("extensions.update.enabled", false);
 

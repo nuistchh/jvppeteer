@@ -2,12 +2,16 @@ package com.ruiyun.jvppeteer.api.core;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.ruiyun.jvppeteer.api.events.BrowserEvents;
-import com.ruiyun.jvppeteer.cdp.entities.BrowserContextOptions;
+import com.ruiyun.jvppeteer.common.BrowserContextOptions;
 import com.ruiyun.jvppeteer.cdp.entities.Cookie;
 import com.ruiyun.jvppeteer.cdp.entities.CookieData;
 import com.ruiyun.jvppeteer.cdp.entities.DebugInfo;
 import com.ruiyun.jvppeteer.cdp.entities.DownloadOptions;
+import com.ruiyun.jvppeteer.common.AddScreenParams;
 import com.ruiyun.jvppeteer.common.Constant;
+import com.ruiyun.jvppeteer.common.CreatePageOptions;
+import com.ruiyun.jvppeteer.common.ScreenInfo;
+import com.ruiyun.jvppeteer.common.WindowBounds;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Predicate;
@@ -22,12 +26,6 @@ import static com.ruiyun.jvppeteer.util.Helper.waitForCondition;
 
 public abstract class Browser extends EventEmitter<BrowserEvents> implements AutoCloseable {
     private static final Logger LOGGER = LoggerFactory.getLogger(Browser.class);
-    /**
-     * 主动调用 browser.close时候为true
-     * 当 connection 断开，浏览器进程未关闭时候，杀死浏览器进程
-     */
-    public volatile boolean autoClose;
-
     /**
      * 获取关联的 Process。
      *
@@ -88,11 +86,31 @@ public abstract class Browser extends EventEmitter<BrowserEvents> implements Aut
     public abstract String wsEndpoint();
 
     /**
+     * Gets the specified window {@link WindowBounds | bounds}.
+     */
+    public abstract WindowBounds getWindowBounds(int windowId);
+
+    /**
+     * Sets the specified window {@link WindowBounds | bounds}.
+     */
+    public abstract void setWindowBounds(int windowId, WindowBounds windowBounds);
+
+    /**
      * 在 默认浏览器上下文 中创建新的 page。
      *
      * @return 新创建的页面对象
      */
-    public abstract Page newPage();
+    public Page newPage() {
+        return this.newPage(null);
+    }
+
+    /**
+     * 在 默认浏览器上下文 中创建新的 page。
+     *
+     * @param options 创建页面的选项
+     * @return 新创建的页面对象
+     */
+    public abstract Page newPage(CreatePageOptions options);
 
     /**
      * 获取所有活动的 targets。
@@ -143,7 +161,19 @@ public abstract class Browser extends EventEmitter<BrowserEvents> implements Aut
      * @return 所有打开的 pages
      */
     public List<Page> pages() {
-        return this.browserContexts().stream().flatMap(context -> context.pages().stream()).collect(Collectors.toList());
+        return this.pages(false);
+    }
+
+    /**
+     * 获取此 Browser 内所有打开的 pages 的列表。
+     * <p>
+     * 如果有多个 浏览器上下文，则返回所有 浏览器上下文 中的所有 pages。
+     *
+     * @param includeAll experimental, setting to true includes all kinds of pages.
+     * @return 所有打开的 pages
+     */
+    public List<Page> pages(boolean includeAll) {
+        return this.browserContexts().stream().flatMap(context -> context.pages(includeAll).stream()).collect(Collectors.toList());
     }
 
     /**
@@ -229,4 +259,36 @@ public abstract class Browser extends EventEmitter<BrowserEvents> implements Aut
 
     public abstract void cancelDownload(String key, String id);
 
+    public abstract boolean isNetworkEnabled();
+
+    /**
+     * Installs an extension and returns the ID. In Chrome, this is only
+     * available if the browser was created using `pipe: true` and the
+     * `--enable-unsafe-extension-debugging` flag is set.
+     */
+    public abstract String installExtension(String path);
+
+    /**
+     * Uninstalls an extension. In Chrome, this is only available if the browser
+     * was created using `pipe: true` and the
+     * `--enable-unsafe-extension-debugging` flag is set.
+     */
+    public abstract void uninstallExtension(String id);
+
+    /**
+     * Gets a list of screen information objects.
+     */
+    public abstract List<ScreenInfo> screens() throws JsonProcessingException;
+
+    /**
+     * Adds a new screen, returns the added screen information object.
+     * Only supported in headless mode.
+     */
+    public abstract ScreenInfo addScreen(AddScreenParams params) throws JsonProcessingException;
+
+    /**
+     * Removes a screen.
+     * Only supported in headless mode. Fails if the primary screen id is specified.
+     */
+    public abstract void removeScreen(String screenId);
 }
